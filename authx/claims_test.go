@@ -40,12 +40,21 @@ func TestInjectUserHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	InjectUserHeaders(req, &Claims{UID: "42", AccountType: "admin", Realname: "Root"})
+	InjectUserHeaders(req, &Claims{UID: "42", AccountID: 42, Tenant: "shanxiuxia", IdentityType: "engineer", AccountType: "admin", Roles: []string{"engineer"}, Realname: "Root"})
 
 	if got := req.Header.Get(HeaderUserID); got != "42" {
 		t.Fatalf("%s=%q", HeaderUserID, got)
 	}
-	if got := req.Header.Get(HeaderRoles); got != "admin" {
+	if got := req.Header.Get(HeaderTenant); got != "shanxiuxia" {
+		t.Fatalf("%s=%q", HeaderTenant, got)
+	}
+	if got := req.Header.Get(HeaderIdentityType); got != "engineer" {
+		t.Fatalf("%s=%q", HeaderIdentityType, got)
+	}
+	if got := req.Header.Get(HeaderAccountID); got != "42" {
+		t.Fatalf("%s=%q", HeaderAccountID, got)
+	}
+	if got := req.Header.Get(HeaderRoles); got != "engineer" {
 		t.Fatalf("%s=%q", HeaderRoles, got)
 	}
 	if got := req.Header.Get(HeaderUserName); got != "Root" {

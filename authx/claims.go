@@ -4,12 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
 const (
 	HeaderUserID        = "X-User-ID"
+	HeaderTenant        = "X-Tenant"
+	HeaderIdentityType  = "X-Identity-Type"
+	HeaderAccountID     = "X-Account-ID"
 	HeaderRoles         = "X-Roles"
 	HeaderUserName      = "X-User-Name"
 	HeaderCredentialID  = "X-Credential-ID"
@@ -18,7 +22,12 @@ const (
 
 type Claims struct {
 	UID          string          `json:"uid"`
+	AccountID    int64           `json:"account_id,omitempty"`
+	IdentityID   int64           `json:"identity_id,omitempty"`
+	Tenant       string          `json:"tenant,omitempty"`
+	IdentityType string          `json:"identity_type,omitempty"`
 	AccountType  string          `json:"account_type"`
+	Roles        []string        `json:"roles,omitempty"`
 	Version      int64           `json:"ver"`
 	Permissions  json.RawMessage `json:"permissions,omitempty"`
 	MerchantID   string          `json:"merchant_id,omitempty"`
@@ -69,7 +78,20 @@ func PermissionsFromRaw(raw json.RawMessage) []string {
 
 func InjectUserHeaders(r *http.Request, claims *Claims) {
 	r.Header.Set(HeaderUserID, claims.UID)
-	r.Header.Set(HeaderRoles, claims.AccountType)
+	if claims.Tenant != "" {
+		r.Header.Set(HeaderTenant, claims.Tenant)
+	}
+	if claims.IdentityType != "" {
+		r.Header.Set(HeaderIdentityType, claims.IdentityType)
+	}
+	if claims.AccountID != 0 {
+		r.Header.Set(HeaderAccountID, claims.UID)
+	}
+	if len(claims.Roles) > 0 {
+		r.Header.Set(HeaderRoles, strings.Join(claims.Roles, ","))
+	} else {
+		r.Header.Set(HeaderRoles, claims.AccountType)
+	}
 
 	name := claims.Realname
 	if name == "" {
