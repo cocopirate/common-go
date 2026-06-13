@@ -21,8 +21,8 @@ import (
 	"net/http"
 	"time"
 
-	httpserver "opengo/common-go/httpx/server"
-	"opengo/common-go/telemetry"
+	httpserver "github.com/cocopirate/common-go/httpx/server"
+	"github.com/cocopirate/common-go/telemetry"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.uber.org/zap"

@@ -1,4 +1,4 @@
-module opengo/common-go/redisx
+module github.com/cocopirate/common-go/redisx
 
 go 1.25.0
 

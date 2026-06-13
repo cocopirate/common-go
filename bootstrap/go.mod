@@ -1,16 +1,12 @@
-module opengo/common-go/bootstrap
+module github.com/cocopirate/common-go/bootstrap
 
 go 1.25.0
-
-replace opengo/common-go/httpx => ../httpx
-
-replace opengo/common-go/telemetry => ../telemetry
 
 require (
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.uber.org/zap v1.28.0
-	opengo/common-go/httpx v0.0.0-00010101000000-000000000000
-	opengo/common-go/telemetry v0.0.0
+	github.com/cocopirate/common-go/httpx v0.0.0
+	github.com/cocopirate/common-go/telemetry v0.0.0
 )
 
 require (

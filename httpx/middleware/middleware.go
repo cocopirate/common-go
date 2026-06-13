@@ -4,10 +4,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cocopirate/common-go/authx"
+	"github.com/cocopirate/common-go/httpx/response"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"opengo/common-go/authx"
-	"opengo/common-go/httpx/response"
 )
 
 func CORS() gin.HandlerFunc {
@@ -51,7 +51,7 @@ func GatewayIdentity() gin.HandlerFunc {
 		}
 		c.Set("user_id", userID)
 		if id, err := strconv.ParseInt(userID, 10, 64); err == nil {
-			c.Set("admin_id", id)
+			c.Set("account_id", id)
 		}
 		if name := c.GetHeader(authx.HeaderUserName); name != "" {
 			c.Set("user_name", name)

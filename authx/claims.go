@@ -30,13 +30,8 @@ type Claims struct {
 	Roles        []string        `json:"roles,omitempty"`
 	Version      int64           `json:"ver"`
 	Permissions  json.RawMessage `json:"permissions,omitempty"`
-	MerchantID   string          `json:"merchant_id,omitempty"`
-	StoreID      string          `json:"store_id,omitempty"`
-	JobType      string          `json:"job_type,omitempty"`
-	LegacySource bool            `json:"legacy_source,omitempty"`
-	Username     string          `json:"username,omitempty"`
-	Realname     string          `json:"realname,omitempty"`
-	Telphone     string          `json:"telphone,omitempty"`
+	Name         string          `json:"name,omitempty"`
+	Attributes   json.RawMessage `json:"attributes,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -93,12 +88,8 @@ func InjectUserHeaders(r *http.Request, claims *Claims) {
 		r.Header.Set(HeaderRoles, claims.AccountType)
 	}
 
-	name := claims.Realname
-	if name == "" {
-		name = claims.Username
-	}
-	if name != "" {
-		r.Header.Set(HeaderUserName, name)
+	if claims.Name != "" {
+		r.Header.Set(HeaderUserName, claims.Name)
 	}
 	if claims.Subject != "" {
 		r.Header.Set(HeaderCredentialID, claims.Subject)

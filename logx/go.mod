@@ -1,4 +1,4 @@
-module opengo/common-go/logx
+module github.com/cocopirate/common-go/logx
 
 go 1.25.0
 

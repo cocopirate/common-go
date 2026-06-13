@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"opengo/common-go/telemetry"
+	"github.com/cocopirate/common-go/telemetry"
 )
 
 const (

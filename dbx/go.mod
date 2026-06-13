@@ -1,4 +1,4 @@
-module opengo/common-go/dbx
+module github.com/cocopirate/common-go/dbx
 
 go 1.25.0
 

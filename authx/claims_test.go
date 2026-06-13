@@ -12,8 +12,8 @@ func TestPermissionsFromRaw(t *testing.T) {
 		raw  string
 		want []string
 	}{
-		{name: "flat", raw: `["admin.read","admin.write"]`, want: []string{"admin.read", "admin.write"}},
-		{name: "grouped", raw: `{"menus":["admin.read"],"apis":["role.write"]}`, want: []string{"admin.read", "role.write"}},
+		{name: "flat", raw: `["resource.read","resource.write"]`, want: []string{"resource.read", "resource.write"}},
+		{name: "grouped", raw: `{"menus":["resource.read"],"apis":["role.write"]}`, want: []string{"resource.read", "role.write"}},
 		{name: "empty", raw: ``, want: nil},
 	}
 	for _, tt := range tests {
@@ -40,21 +40,21 @@ func TestInjectUserHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	InjectUserHeaders(req, &Claims{UID: "42", AccountID: 42, Tenant: "shanxiuxia", IdentityType: "engineer", AccountType: "admin", Roles: []string{"engineer"}, Realname: "Root"})
+	InjectUserHeaders(req, &Claims{UID: "42", AccountID: 42, Tenant: "tenant-a", IdentityType: "operator", AccountType: "admin", Roles: []string{"operator"}, Name: "Root"})
 
 	if got := req.Header.Get(HeaderUserID); got != "42" {
 		t.Fatalf("%s=%q", HeaderUserID, got)
 	}
-	if got := req.Header.Get(HeaderTenant); got != "shanxiuxia" {
+	if got := req.Header.Get(HeaderTenant); got != "tenant-a" {
 		t.Fatalf("%s=%q", HeaderTenant, got)
 	}
-	if got := req.Header.Get(HeaderIdentityType); got != "engineer" {
+	if got := req.Header.Get(HeaderIdentityType); got != "operator" {
 		t.Fatalf("%s=%q", HeaderIdentityType, got)
 	}
 	if got := req.Header.Get(HeaderAccountID); got != "42" {
 		t.Fatalf("%s=%q", HeaderAccountID, got)
 	}
-	if got := req.Header.Get(HeaderRoles); got != "engineer" {
+	if got := req.Header.Get(HeaderRoles); got != "operator" {
 		t.Fatalf("%s=%q", HeaderRoles, got)
 	}
 	if got := req.Header.Get(HeaderUserName); got != "Root" {

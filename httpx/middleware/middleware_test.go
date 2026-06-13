@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/cocopirate/common-go/authx"
 	"github.com/gin-gonic/gin"
-	"opengo/common-go/authx"
 )
 
 func TestInternalOnlyRequiresTokenOutsideDebug(t *testing.T) {
@@ -32,8 +32,8 @@ func TestGatewayIdentitySetsContext(t *testing.T) {
 		if c.GetString("user_id") != "42" {
 			t.Fatalf("user_id=%q", c.GetString("user_id"))
 		}
-		if v, ok := c.Get("admin_id"); !ok || v.(int64) != 42 {
-			t.Fatalf("admin_id=%v ok=%v", v, ok)
+		if v, ok := c.Get("account_id"); !ok || v.(int64) != 42 {
+			t.Fatalf("account_id=%v ok=%v", v, ok)
 		}
 		c.Status(http.StatusNoContent)
 	})

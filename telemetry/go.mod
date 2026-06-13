@@ -1,4 +1,4 @@
-module opengo/common-go/telemetry
+module github.com/cocopirate/common-go/telemetry
 
 go 1.25.0
 

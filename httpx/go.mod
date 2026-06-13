@@ -1,12 +1,12 @@
-module opengo/common-go/httpx
+module github.com/cocopirate/common-go/httpx
 
 go 1.25.0
 
 require (
 	github.com/gin-contrib/cors v1.7.7
 	github.com/gin-gonic/gin v1.12.0
-	opengo/common-go/authx v0.0.0
-	opengo/common-go/telemetry v0.0.0
+	github.com/cocopirate/common-go/authx v0.0.0
+	github.com/cocopirate/common-go/telemetry v0.0.0
 )
 
 require (
@@ -62,7 +62,3 @@ require (
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-replace opengo/common-go/authx => ../authx
-
-replace opengo/common-go/telemetry => ../telemetry

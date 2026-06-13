@@ -1,4 +1,4 @@
-module opengo/common-go/authx
+module github.com/cocopirate/common-go/authx
 
 go 1.25.0
 
