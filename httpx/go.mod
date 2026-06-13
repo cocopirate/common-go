@@ -62,3 +62,8 @@ require (
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+replace (
+	github.com/cocopirate/common-go/authx => ../authx
+	github.com/cocopirate/common-go/telemetry => ../telemetry
+)
