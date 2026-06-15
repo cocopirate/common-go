@@ -1,6 +1,7 @@
 package response
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -59,7 +60,11 @@ func AbortFail(c *gin.Context, httpStatus, code int, msg string) {
 }
 
 func Write(c *gin.Context, httpStatus, code int, msg string, data any) {
-	c.JSON(httpStatus, NewBody(c, code, msg, data))
+	c.Header("Content-Type", "application/json; charset=utf-8")
+	c.Status(httpStatus)
+	enc := json.NewEncoder(c.Writer)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(NewBody(c, code, msg, data))
 }
 
 func NewBody(c *gin.Context, code int, msg string, data any) Body {
