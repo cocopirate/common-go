@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"regexp"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
@@ -62,8 +63,12 @@ func Middleware(opts ...Option) gin.HandlerFunc {
 		}
 
 		// ── Request body ──────────────────────────────────────────────
-		reqBody := readBody(c.Request.Body, cfg.maxBodySize)
-		c.Request.Body = io.NopCloser(bytes.NewBuffer(reqBody)) // restore for downstream handlers
+		// Skip body capture for multipart uploads — reading would truncate large files.
+		var reqBody []byte
+		if !strings.HasPrefix(c.GetHeader("Content-Type"), "multipart/form-data") {
+			reqBody = readBody(c.Request.Body, cfg.maxBodySize)
+			c.Request.Body = io.NopCloser(bytes.NewBuffer(reqBody))
+		}
 
 		if len(reqBody) > 0 {
 			bodyStr := string(reqBody)
