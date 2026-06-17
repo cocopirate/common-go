@@ -4,30 +4,16 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/cocopirate/common-go/telemetry"
+	"github.com/gin-gonic/gin"
 )
 
 const (
 	Success = 0
 
-	CredentialNotFound   = 40001
-	CredentialExists     = 40002
-	InvalidCredentials   = 40003
-	CredentialDisabled   = 40004
-	TokenInvalid         = 40007
-	TokenInvalidated     = 40008
-	MissingToken         = 40009
-	PermissionDenied     = 40010
-	ValidationError      = 40011
-	RefreshTokenInvalid  = 40012
-	LegacySessionExpired = 40013
-	EmailNotVerified     = 40014
-	EmailAlreadyVerified = 40015
-	VerifyTokenInvalid   = 40016
-	VerifyRateLimited    = 40017
-	EmailAlreadyRegist   = 40018
-
+	BadRequestCode      = 40011
+	UnauthorizedCode    = 40007
+	ForbiddenCode       = 40010
 	NotFoundCode        = 40400
 	ConflictCode        = 40900
 	TooManyRequestsCode = 42900
@@ -84,15 +70,15 @@ func GetRequestID(c *gin.Context) string {
 }
 
 func BadRequest(c *gin.Context, msg string) {
-	Fail(c, http.StatusBadRequest, ValidationError, msg)
+	Fail(c, http.StatusBadRequest, BadRequestCode, msg)
 }
 
 func Unauthorized(c *gin.Context, msg string) {
-	Fail(c, http.StatusUnauthorized, TokenInvalid, msg)
+	Fail(c, http.StatusUnauthorized, UnauthorizedCode, msg)
 }
 
 func Forbidden(c *gin.Context, msg string) {
-	Fail(c, http.StatusForbidden, PermissionDenied, msg)
+	Fail(c, http.StatusForbidden, ForbiddenCode, msg)
 }
 
 func NotFound(c *gin.Context, msg string) {
@@ -114,11 +100,11 @@ func InternalServerError(c *gin.Context, msg string) {
 func HTTPCodeToBusinessCode(status int) int {
 	switch status {
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
-		return ValidationError
+		return BadRequestCode
 	case http.StatusUnauthorized:
-		return TokenInvalid
+		return UnauthorizedCode
 	case http.StatusForbidden:
-		return PermissionDenied
+		return ForbiddenCode
 	case http.StatusNotFound:
 		return NotFoundCode
 	case http.StatusConflict:
@@ -133,6 +119,6 @@ func HTTPCodeToBusinessCode(status int) int {
 		if status >= 500 {
 			return InternalError
 		}
-		return ValidationError
+		return BadRequestCode
 	}
 }

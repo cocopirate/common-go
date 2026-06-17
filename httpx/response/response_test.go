@@ -14,22 +14,22 @@ func TestFailWritesUnifiedBody(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Set("request_id", "rid-1")
 
-	Fail(c, http.StatusForbidden, PermissionDenied, "forbidden")
+	Fail(c, http.StatusForbidden, ForbiddenCode, "forbidden")
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status=%d", w.Code)
 	}
-	want := `{"code":40010,"message":"forbidden","data":null,"request_id":"rid-1"}`
+	want := `{"code":40010,"message":"forbidden","data":null,"request_id":"rid-1"}` + "\n"
 	if w.Body.String() != want {
 		t.Fatalf("body=%s want %s", w.Body.String(), want)
 	}
 }
 
 func TestHTTPCodeToBusinessCode(t *testing.T) {
-	if got := HTTPCodeToBusinessCode(http.StatusUnauthorized); got != TokenInvalid {
+	if got := HTTPCodeToBusinessCode(http.StatusUnauthorized); got != UnauthorizedCode {
 		t.Fatalf("401 maps to %d", got)
 	}
-	if got := HTTPCodeToBusinessCode(http.StatusForbidden); got != PermissionDenied {
+	if got := HTTPCodeToBusinessCode(http.StatusForbidden); got != ForbiddenCode {
 		t.Fatalf("403 maps to %d", got)
 	}
 	if got := HTTPCodeToBusinessCode(http.StatusGatewayTimeout); got != UpstreamError {
