@@ -10,16 +10,16 @@ use (
 	./telemetry
 )
 
-replace github.com/cocopirate/common-go/authx v0.0.0 => ./authx
+replace github.com/cocopirate/common-go/authx v0.1.0 => ./authx
 
-replace github.com/cocopirate/common-go/bootstrap v0.0.0 => ./bootstrap
+replace github.com/cocopirate/common-go/bootstrap v0.1.0 => ./bootstrap
 
-replace github.com/cocopirate/common-go/dbx v0.0.0 => ./dbx
+replace github.com/cocopirate/common-go/dbx v0.1.0 => ./dbx
 
-replace github.com/cocopirate/common-go/httpx v0.0.0 => ./httpx
+replace github.com/cocopirate/common-go/httpx v0.1.0 => ./httpx
 
-replace github.com/cocopirate/common-go/logx v0.0.0 => ./logx
+replace github.com/cocopirate/common-go/logx v0.1.0 => ./logx
 
-replace github.com/cocopirate/common-go/redisx v0.0.0 => ./redisx
+replace github.com/cocopirate/common-go/redisx v0.1.0 => ./redisx
 
-replace github.com/cocopirate/common-go/telemetry v0.0.0 => ./telemetry
+replace github.com/cocopirate/common-go/telemetry v0.1.0 => ./telemetry
