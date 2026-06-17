@@ -3,10 +3,10 @@ module github.com/cocopirate/common-go/httpx
 go 1.25.0
 
 require (
+	github.com/cocopirate/common-go/authx v0.1.0
+	github.com/cocopirate/common-go/telemetry v0.1.0
 	github.com/gin-contrib/cors v1.7.7
 	github.com/gin-gonic/gin v1.12.0
-	github.com/cocopirate/common-go/authx v0.0.0
-	github.com/cocopirate/common-go/telemetry v0.0.0
 )
 
 require (
@@ -61,9 +61,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-)
-
-replace (
-	github.com/cocopirate/common-go/authx => ../authx
-	github.com/cocopirate/common-go/telemetry => ../telemetry
 )

@@ -3,10 +3,10 @@ module github.com/cocopirate/common-go/bootstrap
 go 1.25.0
 
 require (
+	github.com/cocopirate/common-go/httpx v0.1.0
+	github.com/cocopirate/common-go/telemetry v0.1.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.uber.org/zap v1.28.0
-	github.com/cocopirate/common-go/httpx v0.0.0
-	github.com/cocopirate/common-go/telemetry v0.0.0
 )
 
 require (
@@ -59,10 +59,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-)
-
-replace (
-	github.com/cocopirate/common-go/authx => ../authx
-	github.com/cocopirate/common-go/httpx => ../httpx
-	github.com/cocopirate/common-go/telemetry => ../telemetry
 )
