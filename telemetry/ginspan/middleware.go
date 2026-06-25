@@ -3,9 +3,7 @@ package ginspan
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
-	"mime/multipart"
 	"regexp"
 	"strings"
 
@@ -75,10 +73,8 @@ func Middleware(opts ...Option) gin.HandlerFunc {
 		// ── Request body ──────────────────────────────────────────────
 		var reqBody []byte
 		contentType := c.GetHeader("Content-Type")
-		if strings.HasPrefix(contentType, "multipart/form-data") {
-			reqBody = captureMultipart(c, cfg.maxBodySize, re)
-		} else {
-			bodyBytes := readBody(c.Request.Body, cfg.maxBodySize)
+		if !strings.HasPrefix(contentType, "multipart/form-data") {
+			bodyBytes := readBody(c.Request.Body)
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 			if len(bodyBytes) > 0 {
 				bodyStr := string(bodyBytes)
@@ -144,105 +140,13 @@ func (w *responseWriter) WriteString(s string) (int, error) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// captureMultipart reads a multipart/form-data body, extracts form fields
-// (masking sensitive values) and file metadata (name + size), and restores
-// the body so downstream handlers can still parse it.
-func captureMultipart(c *gin.Context, maxBodySize int, re *regexp.Regexp) []byte {
-	// Read the full body up to the limit (use a generous cap for multipart).
-	limit := int64(maxBodySize)
-	if limit < 1 {
-		limit = 10 << 20 // 10 MB
-	}
-	bodyBytes, err := io.ReadAll(io.LimitReader(c.Request.Body, limit))
-	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-	if err != nil || len(bodyBytes) == 0 {
-		return nil
-	}
-
-	boundary := extractBoundary(c.GetHeader("Content-Type"))
-	if boundary == "" {
-		return nil
-	}
-
-	mr := multipart.NewReader(bytes.NewReader(bodyBytes), boundary)
-	fields := make(map[string]any)
-	for {
-		part, err := mr.NextPart()
-		if err != nil {
-			break
-		}
-		name := part.FormName()
-		if name == "" {
-			part.Close()
-			continue
-		}
-
-		if part.FileName() != "" {
-			// File part — capture metadata only, not the content
-			fields[name] = map[string]any{
-				"filename": part.FileName(),
-			}
-			// Try to read a snippet to estimate size
-			snip, _ := io.ReadAll(io.LimitReader(part, 64*1024)) // read up to 64KB
-			total := len(snip)
-			// Keep reading to get full size if we hit the snippet limit
-			if total == 64*1024 {
-				remain, _ := io.ReadAll(part)
-				total += len(remain)
-			}
-			fields[name] = map[string]any{
-				"filename": part.FileName(),
-				"size":     total,
-			}
-		} else {
-			// Text field
-			value, _ := io.ReadAll(io.LimitReader(part, 64*1024))
-			strVal := string(value)
-			// Mask sensitive fields
-			if re != nil {
-				dummy := fmt.Sprintf(`"%s":"%s"`, name, strVal)
-				masked := re.ReplaceAllString(dummy, `"$1":"***"`)
-				// If the regex matched, the value was masked; otherwise keep original
-				if masked != dummy {
-					strVal = "***"
-				}
-			}
-			fields[name] = strVal
-		}
-		part.Close()
-	}
-
-	if len(fields) == 0 {
-		return nil
-	}
-
-	data, err := json.Marshal(fields)
-	if err != nil {
-		return nil
-	}
-	return data
-}
-
-// extractBoundary returns the boundary string from a multipart Content-Type header.
-func extractBoundary(contentType string) string {
-	const prefix = "boundary="
-	idx := strings.Index(contentType, prefix)
-	if idx < 0 {
-		return ""
-	}
-	return contentType[idx+len(prefix):]
-}
-
-// readBody reads up to maxSize bytes from rd, returning what was read.
-func readBody(rd io.ReadCloser, maxSize int) []byte {
+// readBody reads the full request body so it can be restored unchanged for
+// downstream handlers. Truncation is only applied to the span attribute.
+func readBody(rd io.ReadCloser) []byte {
 	if rd == nil {
 		return nil
 	}
-	lr := io.LimitReader(rd, int64(maxSize+1)) // +1 to detect overflow
-	b, _ := io.ReadAll(lr)
-	if len(b) > maxSize {
-		b = b[:maxSize]
-	}
+	b, _ := io.ReadAll(rd)
 	return b
 }
 
