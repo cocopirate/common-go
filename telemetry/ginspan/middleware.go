@@ -64,6 +64,14 @@ func Middleware(opts ...Option) gin.HandlerFunc {
 			span.SetAttributes(attribute.String("http.request.header.x_forwarded_for", xff))
 		}
 
+		// ── Common request headers ────────────────────────────────────
+		if ct := c.GetHeader("Content-Type"); ct != "" {
+			span.SetAttributes(attribute.String("http.request.header.content_type", ct))
+		}
+		if cl := c.GetHeader("Content-Length"); cl != "" {
+			span.SetAttributes(attribute.String("http.request.header.content_length", cl))
+		}
+
 		// ── Request body ──────────────────────────────────────────────
 		var reqBody []byte
 		contentType := c.GetHeader("Content-Type")
