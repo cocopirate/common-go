@@ -78,10 +78,13 @@ type AccountBalanceResponse struct {
 }
 
 // AccountBalanceResult holds the balance details for a merchant account.
+// Fields are strings to preserve precision (YeePay returns amounts in cents as strings).
 type AccountBalanceResult struct {
-	MerchantNo string `json:"merchantNo"`
-	// Balance fields vary by account type; use raw map for flexibility.
-	Raw map[string]interface{} `json:"-"`
+	MerchantNo       string `json:"merchantNo"`
+	Balance          string `json:"balance"`
+	AvailableBalance string `json:"availableBalance"`
+	FreezeBalance    string `json:"freezeBalance"`
+	SettleBalance    string `json:"settleBalance"`
 }
 
 // QueryAccountBalance queries the account balance for a given merchant.
