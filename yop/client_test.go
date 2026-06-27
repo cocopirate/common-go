@@ -48,10 +48,19 @@ func TestQueryAccountBalance_Success(t *testing.T) {
 	}
 
 	mockResponse := map[string]interface{}{
-		"code":    "NIG00000",
-		"message": "success",
 		"result": map[string]interface{}{
-			"merchantNo": "10093626404",
+			"returnCode":         "UA00000",
+			"merchantNo":         "10093626404",
+			"totalAccountBalance": 496.01,
+			"initiateMerchantNo": "10089630029",
+			"accountInfoList": []interface{}{
+				map[string]interface{}{
+					"accountType":   "FUND_ACCOUNT",
+					"balance":       0.0,
+					"accountStatus": "AVAILABLE",
+					"createTime":    "2026-04-09 13:13:47",
+				},
+			},
 		},
 	}
 	respBody, _ := json.Marshal(mockResponse)
@@ -79,8 +88,11 @@ func TestQueryAccountBalance_Success(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if resp.Code != "NIG00000" {
-		t.Errorf("expected code 'NIG00000', got %q", resp.Code)
+	if resp.Result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if resp.Result.TotalAccountBalance != 496.01 {
+		t.Errorf("expected totalAccountBalance 496.01, got %v", resp.Result.TotalAccountBalance)
 	}
 
 	// Verify required headers were sent
@@ -148,7 +160,7 @@ func TestQueryAccountBalance_WithSignVerification(t *testing.T) {
 		ReadTimeoutMs:    30000,
 	}
 
-	responseBody := `{"code":"NIG00000","message":"success"}`
+	responseBody := `{"result":{"returnCode":"UA00000","merchantNo":"10093626404","totalAccountBalance":496.01,"accountInfoList":[],"initiateMerchantNo":"10089630029"}}`
 
 	// Sign the response body as Yop server would
 	cleaned := strings.NewReplacer("\t", "", "\n", "", " ", "").Replace(responseBody)
@@ -176,8 +188,8 @@ func TestQueryAccountBalance_WithSignVerification(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if resp.Code != "NIG00000" {
-		t.Errorf("expected code 'NIG00000', got %q", resp.Code)
+	if resp.Result == nil {
+		t.Fatal("expected non-nil result")
 	}
 }
 

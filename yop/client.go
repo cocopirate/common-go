@@ -24,11 +24,19 @@ func WithHTTPClient(hc HTTPClient) ClientOption {
 	}
 }
 
+// WithDebugf sets a debug logging callback. When set, raw request/response info is logged.
+func WithDebugf(fn func(format string, args ...interface{})) ClientOption {
+	return func(c *Client) {
+		c.debugf = fn
+	}
+}
+
 // Client is the YeePay YOP API client.
 type Client struct {
 	config     *Config
 	signer     *YopSigner
 	httpClient HTTPClient
+	debugf     func(format string, args ...interface{})
 }
 
 // NewClient creates a new YOP client from environment variables.
@@ -71,20 +79,26 @@ type YopResponse struct {
 }
 
 // AccountBalanceResponse holds the parsed account balance result.
+// Matches the actual YeePay API response structure.
 type AccountBalanceResponse struct {
-	Code    string                `json:"code"`
-	Message string                `json:"message"`
-	Result  *AccountBalanceResult `json:"result,omitempty"`
+	Result *AccountBalanceResult `json:"result"`
 }
 
 // AccountBalanceResult holds the balance details for a merchant account.
-// Fields are strings to preserve precision (YeePay returns amounts in cents as strings).
 type AccountBalanceResult struct {
-	MerchantNo       string `json:"merchantNo"`
-	Balance          string `json:"balance"`
-	AvailableBalance string `json:"availableBalance"`
-	FreezeBalance    string `json:"freezeBalance"`
-	SettleBalance    string `json:"settleBalance"`
+	ReturnCode         string        `json:"returnCode"`
+	MerchantNo         string        `json:"merchantNo"`
+	TotalAccountBalance float64      `json:"totalAccountBalance"`
+	AccountInfoList    []AccountInfo `json:"accountInfoList"`
+	InitiateMerchantNo string        `json:"initiateMerchantNo"`
+}
+
+// AccountInfo represents a single account type balance entry.
+type AccountInfo struct {
+	AccountType   string  `json:"accountType"`
+	Balance       float64 `json:"balance"`
+	AccountStatus string  `json:"accountStatus"`
+	CreateTime    string  `json:"createTime"`
 }
 
 // QueryAccountBalance queries the account balance for a given merchant.
@@ -147,6 +161,11 @@ func (c *Client) doGet(ctx context.Context, apiPath string, params map[string]st
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("yop: read response: %w", err)
+	}
+
+	// Debug: log raw response
+	if c.debugf != nil {
+		c.debugf("yop %s %s → HTTP %d\n%s", "GET", reqURL, resp.StatusCode, string(bodyBytes))
 	}
 
 	// Check HTTP status
