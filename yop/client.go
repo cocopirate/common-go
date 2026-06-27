@@ -2,7 +2,6 @@ package yop
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,7 +30,9 @@ func WithDebugf(fn func(format string, args ...interface{})) ClientOption {
 	}
 }
 
-// Client is the YeePay YOP API client.
+// Client is the YeePay YOP API client. It handles request signing and response
+// verification only. Business-specific API calls and response parsing should
+// be implemented in the calling service.
 type Client struct {
 	config     *Config
 	signer     *YopSigner
@@ -49,7 +50,6 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 }
 
 // NewClientFromConfig creates a client from an already-loaded Config.
-// Useful for testing or custom configuration.
 func NewClientFromConfig(cfg *Config, opts ...ClientOption) (*Client, error) {
 	creds, err := ParseCredentials(cfg)
 	if err != nil {
@@ -71,55 +71,10 @@ func NewClientFromConfig(cfg *Config, opts ...ClientOption) (*Client, error) {
 	return c, nil
 }
 
-// YopResponse is the generic YOP API response envelope.
-type YopResponse struct {
-	Code    string          `json:"code"`
-	Message string          `json:"message"`
-	Result  json.RawMessage `json:"result,omitempty"`
-}
-
-// AccountBalanceResponse holds the parsed account balance result.
-// Matches the actual YeePay API response structure.
-type AccountBalanceResponse struct {
-	Result *AccountBalanceResult `json:"result"`
-}
-
-// AccountBalanceResult holds the balance details for a merchant account.
-type AccountBalanceResult struct {
-	ReturnCode         string        `json:"returnCode"`
-	MerchantNo         string        `json:"merchantNo"`
-	TotalAccountBalance float64      `json:"totalAccountBalance"`
-	AccountInfoList    []AccountInfo `json:"accountInfoList"`
-	InitiateMerchantNo string        `json:"initiateMerchantNo"`
-}
-
-// AccountInfo represents a single account type balance entry.
-type AccountInfo struct {
-	AccountType   string  `json:"accountType"`
-	Balance       float64 `json:"balance"`
-	AccountStatus string  `json:"accountStatus"`
-	CreateTime    string  `json:"createTime"`
-}
-
-// QueryAccountBalance queries the account balance for a given merchant.
-// API: GET /rest/v1.0/account/accountinfos/query?merchantNo={merchantNo}
-func (c *Client) QueryAccountBalance(ctx context.Context, merchantNo string) (*AccountBalanceResponse, error) {
-	apiPath := "/rest/v1.0/account/accountinfos/query"
-	params := map[string]string{
-		"merchantNo": merchantNo,
-	}
-
-	resp, err := c.doGet(ctx, apiPath, params)
-	if err != nil {
-		return nil, err
-	}
-
-	var result AccountBalanceResponse
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("yop: parse response: %w", err)
-	}
-
-	return &result, nil
+// Get performs a signed GET request and returns the raw response body.
+// Business-specific parsing is handled by the caller.
+func (c *Client) Get(ctx context.Context, apiPath string, params map[string]string) ([]byte, error) {
+	return c.doGet(ctx, apiPath, params)
 }
 
 // doGet performs a signed GET request and returns the raw response body.

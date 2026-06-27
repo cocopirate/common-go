@@ -10,15 +10,6 @@ import (
 	"time"
 )
 
-// testKeyPair generates a fresh RSA key pair for testing.
-func testKeyPair() (*rsa.PrivateKey, *rsa.PublicKey) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		panic(err)
-	}
-	return priv, &priv.PublicKey
-}
-
 func TestBuildCanonicalQuery_Empty(t *testing.T) {
 	if result := buildCanonicalQuery(nil); result != "" {
 		t.Errorf("expected empty string, got %q", result)

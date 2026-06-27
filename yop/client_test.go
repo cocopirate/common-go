@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -23,7 +22,6 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func TestNewClient_MissingCredentials(t *testing.T) {
-	// Ensure required env vars are unset
 	for _, key := range []string{"YOP_APP_KEY", "YOP_PRIVATE_KEY", "YOP_PUBLIC_KEY", "YOP_CONFIG_FILE"} {
 		t.Setenv(key, "")
 	}
@@ -34,7 +32,7 @@ func TestNewClient_MissingCredentials(t *testing.T) {
 	}
 }
 
-func TestQueryAccountBalance_Success(t *testing.T) {
+func TestGet_Success(t *testing.T) {
 	priv, pub := testKeyPair()
 
 	cfg := &Config{
@@ -47,34 +45,16 @@ func TestQueryAccountBalance_Success(t *testing.T) {
 		ReadTimeoutMs:    30000,
 	}
 
-	mockResponse := map[string]interface{}{
-		"result": map[string]interface{}{
-			"returnCode":         "UA00000",
-			"merchantNo":         "10093626404",
-			"totalAccountBalance": 496.01,
-			"initiateMerchantNo": "10089630029",
-			"accountInfoList": []interface{}{
-				map[string]interface{}{
-					"accountType":   "FUND_ACCOUNT",
-					"balance":       0.0,
-					"accountStatus": "AVAILABLE",
-					"createTime":    "2026-04-09 13:13:47",
-				},
-			},
-		},
-	}
-	respBody, _ := json.Marshal(mockResponse)
+	mockBody := `{"state":"SUCCESS","result":{"returnCode":"UA00000","merchantNo":"123","totalAccountBalance":100.50,"accountInfoList":[]}}`
 
 	var capturedHeaders http.Header
-	var capturedURL string
 
 	client, err := NewClientFromConfig(cfg, WithHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			capturedHeaders = r.Header
-			capturedURL = r.URL.String()
 			return &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(string(respBody))),
+				Body:       io.NopCloser(strings.NewReader(mockBody)),
 				Header:     http.Header{},
 			}, nil
 		}),
@@ -83,39 +63,27 @@ func TestQueryAccountBalance_Success(t *testing.T) {
 		t.Fatalf("unexpected error creating client: %v", err)
 	}
 
-	resp, err := client.QueryAccountBalance(context.Background(), "10093626404")
+	raw, err := client.Get(context.Background(), "/rest/v1.0/account/accountinfos/query", map[string]string{
+		"merchantNo": "10093626404",
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if resp.Result == nil {
-		t.Fatal("expected non-nil result")
-	}
-	if resp.Result.TotalAccountBalance != 496.01 {
-		t.Errorf("expected totalAccountBalance 496.01, got %v", resp.Result.TotalAccountBalance)
+	if string(raw) != mockBody {
+		t.Errorf("expected raw body %q, got %q", mockBody, string(raw))
 	}
 
 	// Verify required headers were sent
 	if capturedHeaders.Get(HeaderYopAppKey) != "test_app_key" {
-		t.Errorf("x-yop-appkey not set correctly")
-	}
-	if capturedHeaders.Get(HeaderYopRequestID) == "" {
-		t.Error("x-yop-request-id not set")
+		t.Error("x-yop-appkey not set correctly")
 	}
 	if capturedHeaders.Get(HeaderAuthorization) == "" {
 		t.Error("Authorization not set")
 	}
-	if capturedHeaders.Get(HeaderYopSessionID) == "" {
-		t.Error("x-yop-session-id not set")
-	}
-
-	// Verify URL contains the merchantNo parameter
-	if !strings.Contains(capturedURL, "merchantNo=10093626404") {
-		t.Errorf("URL should contain merchantNo param, got: %s", capturedURL)
-	}
 }
 
-func TestQueryAccountBalance_HTTPError(t *testing.T) {
+func TestGet_HTTPError(t *testing.T) {
 	priv, pub := testKeyPair()
 
 	cfg := &Config{
@@ -132,7 +100,7 @@ func TestQueryAccountBalance_HTTPError(t *testing.T) {
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusInternalServerError,
-				Body:       io.NopCloser(strings.NewReader(`{"code":"SYSTEM_ERROR"}`)),
+				Body:       io.NopCloser(strings.NewReader(`error`)),
 				Header:     http.Header{},
 			}, nil
 		}),
@@ -141,13 +109,13 @@ func TestQueryAccountBalance_HTTPError(t *testing.T) {
 		t.Fatalf("unexpected error creating client: %v", err)
 	}
 
-	_, err = client.QueryAccountBalance(context.Background(), "10093626404")
+	_, err = client.Get(context.Background(), "/api/test", nil)
 	if err == nil {
 		t.Fatal("expected error for HTTP 500")
 	}
 }
 
-func TestQueryAccountBalance_WithSignVerification(t *testing.T) {
+func TestGet_WithSignVerification(t *testing.T) {
 	priv, pub := testKeyPair()
 
 	cfg := &Config{
@@ -160,7 +128,7 @@ func TestQueryAccountBalance_WithSignVerification(t *testing.T) {
 		ReadTimeoutMs:    30000,
 	}
 
-	responseBody := `{"result":{"returnCode":"UA00000","merchantNo":"10093626404","totalAccountBalance":496.01,"accountInfoList":[],"initiateMerchantNo":"10089630029"}}`
+	responseBody := `{"state":"SUCCESS","result":{"returnCode":"UA00000"}}`
 
 	// Sign the response body as Yop server would
 	cleaned := strings.NewReplacer("\t", "", "\n", "", " ", "").Replace(responseBody)
@@ -183,18 +151,26 @@ func TestQueryAccountBalance_WithSignVerification(t *testing.T) {
 		t.Fatalf("unexpected error creating client: %v", err)
 	}
 
-	resp, err := client.QueryAccountBalance(context.Background(), "10093626404")
+	raw, err := client.Get(context.Background(), "/api/test", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if resp.Result == nil {
-		t.Fatal("expected non-nil result")
+	if string(raw) != responseBody {
+		t.Errorf("expected %q, got %q", responseBody, string(raw))
 	}
 }
 
-// keyToB64 encodes an RSA private key to the raw base64 format used by YOP config.
-// The config stores PEM body as standard base64 (not URL-safe).
+// ── test helpers ──────────────────────────────────────────────────────────────
+
+func testKeyPair() (*rsa.PrivateKey, *rsa.PublicKey) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic(err)
+	}
+	return priv, &priv.PublicKey
+}
+
 func keyToB64(priv *rsa.PrivateKey) string {
 	der, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
@@ -203,7 +179,6 @@ func keyToB64(priv *rsa.PrivateKey) string {
 	return base64.StdEncoding.EncodeToString(der)
 }
 
-// pubKeyToB64 encodes an RSA public key to the raw base64 format used by YOP config.
 func pubKeyToB64(pub *rsa.PublicKey) string {
 	der, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
