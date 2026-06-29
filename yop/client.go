@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -74,13 +76,18 @@ func NewClientFromConfig(cfg *Config, opts ...ClientOption) (*Client, error) {
 // Get performs a signed GET request and returns the raw response body.
 // Business-specific parsing is handled by the caller.
 func (c *Client) Get(ctx context.Context, apiPath string, params map[string]string) ([]byte, error) {
-	return c.doGet(ctx, apiPath, params)
+	return c.doRequest(ctx, "GET", apiPath, params)
 }
 
-// doGet performs a signed GET request and returns the raw response body.
-func (c *Client) doGet(ctx context.Context, apiPath string, params map[string]string) ([]byte, error) {
+// PostForm performs a signed POST request with application/x-www-form-urlencoded body.
+func (c *Client) PostForm(ctx context.Context, apiPath string, params map[string]string) ([]byte, error) {
+	return c.doRequest(ctx, "POST", apiPath, params)
+}
+
+// doRequest performs a signed request and returns the raw response body.
+func (c *Client) doRequest(ctx context.Context, method, apiPath string, params map[string]string) ([]byte, error) {
 	// Generate signature
-	signResult, err := c.signer.SignRequest("GET", apiPath, params)
+	signResult, err := c.signer.SignRequest(method, apiPath, params)
 	if err != nil {
 		return nil, err
 	}
@@ -88,18 +95,32 @@ func (c *Client) doGet(ctx context.Context, apiPath string, params map[string]st
 	// Build URL
 	reqURL := c.config.ServerRoot + apiPath
 
+	// Build request body for POST
+	var body io.Reader
+	if method == "POST" {
+		form := make(url.Values, len(params))
+		for k, v := range params {
+			form.Set(k, v)
+		}
+		body = strings.NewReader(form.Encode())
+	}
+
 	// Build request
-	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("yop: create request: %w", err)
 	}
 
-	// Add query parameters
-	q := req.URL.Query()
-	for k, v := range params {
-		q.Add(k, v)
+	if method == "POST" {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	} else {
+		// Add query parameters for GET
+		q := req.URL.Query()
+		for k, v := range params {
+			q.Add(k, v)
+		}
+		req.URL.RawQuery = q.Encode()
 	}
-	req.URL.RawQuery = q.Encode()
 
 	// Add signed headers
 	for k, v := range signResult.Headers {
@@ -120,7 +141,7 @@ func (c *Client) doGet(ctx context.Context, apiPath string, params map[string]st
 
 	// Debug: log raw response
 	if c.debugf != nil {
-		c.debugf("yop %s %s → HTTP %d\n%s", "GET", reqURL, resp.StatusCode, string(bodyBytes))
+		c.debugf("yop %s %s → HTTP %d\n%s", method, reqURL, resp.StatusCode, string(bodyBytes))
 	}
 
 	// Check HTTP status
