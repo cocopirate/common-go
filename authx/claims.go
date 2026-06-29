@@ -15,6 +15,8 @@ const (
 	HeaderIdentityType  = "X-Identity-Type"
 	HeaderAccountID     = "X-Account-ID"
 	HeaderRoles         = "X-Roles"
+	HeaderPermissions   = "X-Permissions"
+	HeaderDataScopes    = "X-Data-Scopes"
 	HeaderUserName      = "X-User-Name"
 	HeaderCredentialID  = "X-Credential-ID"
 	HeaderInternalToken = "X-Internal-Token"
