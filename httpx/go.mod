@@ -3,7 +3,7 @@ module github.com/cocopirate/common-go/httpx
 go 1.25.0
 
 require (
-	github.com/cocopirate/common-go/authx v0.1.0
+	github.com/cocopirate/common-go/authx v0.1.1
 	github.com/cocopirate/common-go/telemetry v0.1.0
 	github.com/gin-contrib/cors v1.7.7
 	github.com/gin-gonic/gin v1.12.0

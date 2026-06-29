@@ -11,7 +11,7 @@ use (
 	./yop
 )
 
-replace github.com/cocopirate/common-go/authx v0.1.0 => ./authx
+replace github.com/cocopirate/common-go/authx v0.1.1 => ./authx
 
 replace github.com/cocopirate/common-go/bootstrap v0.1.0 => ./bootstrap
 
