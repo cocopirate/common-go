@@ -15,11 +15,12 @@ type DataScope struct {
 }
 
 type ScopeValue struct {
-	ProvinceCodes []int64 `json:"province_codes"`
-	CityCodes     []int64 `json:"city_codes"`
-	CountyCodes   []int64 `json:"county_codes"`
-	MerchantIDs   []int64 `json:"merchant_ids"`
-	StoreIDs      []int64 `json:"store_ids"`
+	ProvinceCodes []int64  `json:"province_codes"`
+	CityCodes     []int64  `json:"city_codes"`
+	CountyCodes   []int64  `json:"county_codes"`
+	MerchantIDs   []int64  `json:"merchant_ids"`
+	StoreIDs      []int64  `json:"store_ids"`
+	SourceCodes   []string `json:"source_codes"`
 }
 
 type ResourceScope struct {
@@ -27,6 +28,7 @@ type ResourceScope struct {
 	Regions     []ScopeValue
 	MerchantIDs []int64
 	StoreIDs    []int64
+	SourceCodes []string
 }
 
 func DataScopesFromHeader(h http.Header) []DataScope {
@@ -62,10 +64,13 @@ func ResourceScopeFor(scopes []DataScope, resourceType string) ResourceScope {
 			out.MerchantIDs = append(out.MerchantIDs, value.MerchantIDs...)
 		case "store":
 			out.StoreIDs = append(out.StoreIDs, value.StoreIDs...)
+		case "source":
+			out.SourceCodes = append(out.SourceCodes, value.SourceCodes...)
 		}
 	}
 	out.MerchantIDs = uniqueInt64s(out.MerchantIDs)
 	out.StoreIDs = uniqueInt64s(out.StoreIDs)
+	out.SourceCodes = uniqueStrings(out.SourceCodes)
 	return out
 }
 
@@ -107,6 +112,25 @@ func uniqueInt64s(values []int64) []int64 {
 	out := make([]int64, 0, len(values))
 	for _, v := range values {
 		if v == 0 {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		if v == "" {
 			continue
 		}
 		if _, ok := seen[v]; ok {
