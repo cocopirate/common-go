@@ -23,17 +23,19 @@ const (
 )
 
 type Claims struct {
-	UID          string          `json:"uid"`
-	AccountID    int64           `json:"account_id,omitempty"`
-	IdentityID   int64           `json:"identity_id,omitempty"`
-	Tenant       string          `json:"tenant,omitempty"`
-	IdentityType string          `json:"identity_type,omitempty"`
-	AccountType  string          `json:"account_type"`
-	Roles        []string        `json:"roles,omitempty"`
-	Version      int64           `json:"ver"`
-	Permissions  json.RawMessage `json:"permissions,omitempty"`
-	Name         string          `json:"name,omitempty"`
-	Attributes   json.RawMessage `json:"attributes,omitempty"`
+	UID          string   `json:"uid"`
+	AccountID    int64    `json:"account_id,omitempty"`
+	IdentityID   int64    `json:"identity_id,omitempty"`
+	Tenant       string   `json:"tenant,omitempty"`
+	IdentityType string   `json:"identity_type,omitempty"`
+	AccountType  string   `json:"account_type"`
+	Roles        []string `json:"roles,omitempty"`
+	Version      int64    `json:"ver"`
+	// Deprecated: permissions are no longer carried in JWTs. Gateway resolves
+	// effective permissions from Redis/dashboard and injects X-Permissions.
+	Permissions json.RawMessage `json:"-"`
+	Name        string          `json:"name,omitempty"`
+	Attributes  json.RawMessage `json:"attributes,omitempty"`
 	jwt.RegisteredClaims
 }
 
