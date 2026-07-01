@@ -20,3 +20,14 @@ func TestResourceScopeForSourceCodes(t *testing.T) {
 		t.Fatalf("SourceCodes = %v", scope.SourceCodes)
 	}
 }
+
+func TestResourceScopeForStringEncodedScopeValue(t *testing.T) {
+	h := http.Header{}
+	h.Set(HeaderDataScopes, `[{"resource_type":"order","scope_type":"source","scope_value":"{\"source_codes\":[\"4086\"]}","status":1}]`)
+
+	scope := ResourceScopeFor(DataScopesFromHeader(h), "order")
+
+	if len(scope.SourceCodes) != 1 || scope.SourceCodes[0] != "4086" {
+		t.Fatalf("SourceCodes = %v, want [4086]", scope.SourceCodes)
+	}
+}

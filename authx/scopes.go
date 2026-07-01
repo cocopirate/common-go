@@ -55,7 +55,7 @@ func ResourceScopeFor(scopes []DataScope, resourceType string) ResourceScope {
 		}
 		var value ScopeValue
 		if len(scope.ScopeValue) > 0 {
-			_ = json.Unmarshal(scope.ScopeValue, &value)
+			value = parseScopeValue(scope.ScopeValue)
 		}
 		switch scope.ScopeType {
 		case "region":
@@ -72,6 +72,21 @@ func ResourceScopeFor(scopes []DataScope, resourceType string) ResourceScope {
 	out.StoreIDs = uniqueInt64s(out.StoreIDs)
 	out.SourceCodes = uniqueStrings(out.SourceCodes)
 	return out
+}
+
+func parseScopeValue(raw json.RawMessage) ScopeValue {
+	var value ScopeValue
+	if len(raw) == 0 {
+		return value
+	}
+	if json.Unmarshal(raw, &value) == nil {
+		return value
+	}
+	var encoded string
+	if json.Unmarshal(raw, &encoded) == nil && encoded != "" {
+		_ = json.Unmarshal([]byte(encoded), &value)
+	}
+	return value
 }
 
 func HasPermission(perms []string, required string) bool {
