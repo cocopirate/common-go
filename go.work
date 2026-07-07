@@ -15,7 +15,7 @@ replace github.com/cocopirate/common-go/authx v0.1.4 => ./authx
 
 replace github.com/cocopirate/common-go/bootstrap v0.1.0 => ./bootstrap
 
-replace github.com/cocopirate/common-go/dbx v0.1.0 => ./dbx
+replace github.com/cocopirate/common-go/dbx v0.1.1 => ./dbx
 
 replace github.com/cocopirate/common-go/httpx v0.1.0 => ./httpx
 
