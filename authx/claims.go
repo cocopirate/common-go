@@ -29,6 +29,7 @@ type Claims struct {
 	Tenant       string          `json:"tenant,omitempty"`
 	IdentityType string          `json:"identity_type,omitempty"`
 	AccountType  string          `json:"account_type"`
+	SessionID    string          `json:"session_id,omitempty"`
 	Roles        []string        `json:"roles,omitempty"`
 	Version      int64           `json:"ver"`
 	Name         string          `json:"name,omitempty"`
