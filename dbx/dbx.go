@@ -11,6 +11,8 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -89,12 +91,20 @@ func RunMigrations(databaseURL string, fs embed.FS, log *zap.Logger) error {
 // ─── private helpers ─────────────────────────────────────────────────────────
 
 func gormConfig(debug bool) *gorm.Config {
-	level := gormlogger.Silent
+	level := gormlogger.Warn
 	if debug {
 		level = gormlogger.Info
 	}
 	return &gorm.Config{
-		Logger: gormlogger.Default.LogMode(level),
+		Logger: gormlogger.New(
+			log.New(os.Stdout, "\r\n", log.LstdFlags),
+			gormlogger.Config{
+				SlowThreshold:             200 * time.Millisecond,
+				LogLevel:                  level,
+				IgnoreRecordNotFoundError: true,
+				Colorful:                  false,
+			},
+		),
 	}
 }
 
