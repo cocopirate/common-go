@@ -12,7 +12,10 @@ github.com/cloudwego/base64x v0.1.7 h1:NppS+Fgzg5ovhn4NkUXaDT3x9jldgH5ToMCqzBSi2
 github.com/cloudwego/base64x v0.1.7/go.mod h1:Cu1PV9zfrSf7ET2tIbWbbEy7jO7HHJ13q4X2SQ8aWYg=
 github.com/cocopirate/common-go/httpx v0.1.0 h1:zLtsqYhSosSwoCoAT7kss1atS13S8J0p4kEUXMnundw=
 github.com/cocopirate/common-go/httpx v0.1.0/go.mod h1:WZC1eo8WgSGONJ3ec1mpdwCYx2hs/WBdtZbfTI/Pg9o=
+github.com/cocopirate/common-go/httpx v0.1.2 h1:Tlmq+XUkJ1PG6atmOcrL1Jms8ekjoZDA2aO5S6lmg8k=
+github.com/cocopirate/common-go/httpx v0.1.2/go.mod h1:JsVR8fm6pV8OfhUuPvoVh0MhbN+UL0ci7m0fYLMG9Yg=
 github.com/cocopirate/common-go/telemetry v0.1.0 h1:qdSVEg9cE7ch3o0ZIS9ysFJlQjcNmgBJctoCKEo4Lg0=
+github.com/cocopirate/common-go/telemetry v0.1.0/go.mod h1:+MiN+gLR4Gh5IprWJavAXYhdTmuaUKxJucIHrSXt3lQ=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=

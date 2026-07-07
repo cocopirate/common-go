@@ -3,7 +3,7 @@ module github.com/cocopirate/common-go/bootstrap
 go 1.25.0
 
 require (
-	github.com/cocopirate/common-go/httpx v0.1.0
+	github.com/cocopirate/common-go/httpx v0.1.2
 	github.com/cocopirate/common-go/telemetry v0.1.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.uber.org/zap v1.28.0
