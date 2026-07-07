@@ -12,6 +12,8 @@ github.com/cloudwego/base64x v0.1.7 h1:NppS+Fgzg5ovhn4NkUXaDT3x9jldgH5ToMCqzBSi2
 github.com/cloudwego/base64x v0.1.7/go.mod h1:Cu1PV9zfrSf7ET2tIbWbbEy7jO7HHJ13q4X2SQ8aWYg=
 github.com/cocopirate/common-go/authx v0.1.4 h1:YxiwPVRQonodnlSU8aF9gWW8oxtR2FHNRaIDDhhkUwI=
 github.com/cocopirate/common-go/authx v0.1.4/go.mod h1:bist9FzlMZNpMyHVeM9q97JG6M2D0XaWvK3+yp4pStE=
+github.com/cocopirate/common-go/authx v0.1.5 h1:TVgwNB9SdArUpNZPG3GoBsvfVLPjUCcBTWba4rkmRXM=
+github.com/cocopirate/common-go/authx v0.1.5/go.mod h1:bist9FzlMZNpMyHVeM9q97JG6M2D0XaWvK3+yp4pStE=
 github.com/cocopirate/common-go/telemetry v0.1.0 h1:qdSVEg9cE7ch3o0ZIS9ysFJlQjcNmgBJctoCKEo4Lg0=
 github.com/cocopirate/common-go/telemetry v0.1.0/go.mod h1:+MiN+gLR4Gh5IprWJavAXYhdTmuaUKxJucIHrSXt3lQ=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
