@@ -125,9 +125,14 @@ func pkcs5Unpad(data []byte) []byte {
 	return data[:len(data)-padding]
 }
 
-// urlSafeBase64Decode decodes URL-safe base64, converting - and _ back to + and /.
+// urlSafeBase64Decode decodes URL-safe base64 (RFC 3548).
+// Converts - → + and _ → /, adds back stripped padding, then decodes.
 func urlSafeBase64Decode(s string) ([]byte, error) {
 	s = strings.ReplaceAll(s, "-", "+")
 	s = strings.ReplaceAll(s, "_", "/")
+	// Add back stripped padding
+	if m := len(s) % 4; m != 0 {
+		s += strings.Repeat("=", 4-m)
+	}
 	return base64.StdEncoding.DecodeString(s)
 }
