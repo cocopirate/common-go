@@ -25,4 +25,4 @@ replace github.com/cocopirate/common-go/redisx v0.1.0 => ./redisx
 
 replace github.com/cocopirate/common-go/telemetry v0.1.0 => ./telemetry
 
-replace github.com/cocopirate/common-go/yop v0.1.5 => ./yop
+replace github.com/cocopirate/common-go/yop v0.1.6 => ./yop
