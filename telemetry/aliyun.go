@@ -17,3 +17,10 @@ func ReadAliyunMetricConfig() (endpoint string, ok bool) {
 	endpoint = os.Getenv("ALIYUN_OTEL_METRIC_ENDPOINT")
 	return endpoint, endpoint != ""
 }
+
+// ReadAliyunLogConfig reads ALIYUN_OTEL_LOG_ENDPOINT from the environment.
+// Returns the endpoint and whether it is configured.
+func ReadAliyunLogConfig() (endpoint string, ok bool) {
+	endpoint = os.Getenv("ALIYUN_OTEL_LOG_ENDPOINT")
+	return endpoint, endpoint != ""
+}

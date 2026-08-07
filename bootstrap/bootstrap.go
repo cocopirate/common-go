@@ -38,12 +38,19 @@ type App struct {
 
 	otelShutdown    func()
 	metricsShutdown func()
+	logShutdown     func()
 }
 
 // New creates an App for the given service name, initialising a logger and
 // OpenTelemetry exporters. Call Close (or defer it) to flush exporters.
 func New(serviceName string, debug bool) *App {
 	log := newLogger(debug)
+	// 日志管道 (Aliyun 模式): 先把 OTel 日志导出器挂到 logger 上,
+	// 这样后续 Setup 过程中的日志也会走 OTLP。
+	logShutdown, otelLogger := telemetry.SetupLogs(serviceName, log)
+	if otelLogger != nil {
+		log = telemetry.WithOtelLogBridge(log, otelLogger)
+	}
 	otelShutdown, tp := telemetry.Setup(serviceName, "", log)
 	metricsShutdown := telemetry.SetupMetrics(serviceName, log)
 	return &App{
@@ -51,6 +58,7 @@ func New(serviceName string, debug bool) *App {
 		TP:              tp,
 		otelShutdown:    otelShutdown,
 		metricsShutdown: metricsShutdown,
+		logShutdown:     logShutdown,
 	}
 }
 
@@ -70,6 +78,7 @@ func (a *App) Run(ctx context.Context, srv *http.Server, shutdownTimeout time.Du
 func (a *App) Close() {
 	a.metricsShutdown()
 	a.otelShutdown()
+	a.logShutdown()
 	_ = a.Log.Sync()
 }
 
