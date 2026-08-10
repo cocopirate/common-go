@@ -19,6 +19,7 @@ package telemetry
 
 import (
 	"context"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -195,6 +196,12 @@ func (c *otelLogCore) forward(entry zapcore.Entry, fields []zapcore.Field) {
 	r.SetSeverityText(entry.Level.String())
 	r.SetBody(attribute.StringValue(entry.Message))
 
+	// 业务字段 (除 trace_id/span_id, 它们经 span context 传递) 转 OTLP
+	// attributes, 使 SLS 能按业务字段 (如 order_id、req_body) 查询。
+	if attrs := fieldAttrs(all); len(attrs) > 0 {
+		r.AddAttributes(attrs...)
+	}
+
 	// Trace 上下文通过 Emit 的 ctx 传递 (Logs Bridge API)。
 	// 无 trace 上下文的日志同样转发 (空 span context), 保证不装
 	// Logtail 时 SLS 也能全量收到日志; 带 trace 的日志可与链路关联。
@@ -216,6 +223,48 @@ func (c *otelLogCore) forward(entry zapcore.Entry, fields []zapcore.Field) {
 // Returns the input unchanged when the path cannot be matched.
 func logsEndpointFromTrace(traceEndpoint string) string {
 	return strings.Replace(traceEndpoint, "/api/otlp/traces", "/api/otlp/logs", 1)
+}
+
+// fieldAttrs converts zap fields (except trace_id/span_id, which travel via
+// the span context) into OTLP attributes. Scalar types keep their type;
+// composite or unsupported fields fall back to their string form.
+func fieldAttrs(fields []zapcore.Field) []attribute.KeyValue {
+	attrs := make([]attribute.KeyValue, 0, len(fields))
+	for _, f := range fields {
+		if f.Key == "" || f.Key == "trace_id" || f.Key == "span_id" {
+			continue
+		}
+		if f.Type == zapcore.SkipType {
+			continue
+		}
+		attrs = append(attrs, fieldAttr(f))
+	}
+	return attrs
+}
+
+// fieldAttr maps a single zap field to an OTLP attribute, preserving the
+// underlying type for numeric and boolean fields.
+func fieldAttr(f zapcore.Field) attribute.KeyValue {
+	switch f.Type {
+	case zapcore.StringType, zapcore.StringerType, zapcore.ErrorType:
+		return attribute.String(f.Key, f.String)
+	case zapcore.Int64Type, zapcore.Int32Type, zapcore.Int16Type, zapcore.Int8Type,
+		zapcore.Uint64Type, zapcore.Uint32Type, zapcore.Uint16Type, zapcore.Uint8Type:
+		return attribute.Int64(f.Key, f.Integer)
+	case zapcore.Float64Type:
+		return attribute.Float64(f.Key, math.Float64frombits(uint64(f.Integer)))
+	case zapcore.Float32Type:
+		return attribute.Float64(f.Key, float64(math.Float32frombits(uint32(f.Integer))))
+	case zapcore.BoolType:
+		return attribute.Bool(f.Key, f.Integer != 0)
+	case zapcore.DurationType:
+		// nanoseconds, same as zap's AddDuration
+		return attribute.Int64(f.Key, f.Integer)
+	case zapcore.TimeType:
+		return attribute.String(f.Key, time.Unix(0, f.Integer).UTC().Format(time.RFC3339Nano))
+	default:
+		return attribute.String(f.Key, f.String)
+	}
 }
 
 // traceIDsFromFields scans zap fields for the trace_id/span_id string values

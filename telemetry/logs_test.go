@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/embedded"
 	"go.opentelemetry.io/otel/trace"
@@ -48,10 +49,12 @@ func TestOtelLogBridge(t *testing.T) {
 		t.Fatal("WithOtelLogBridge returned nil")
 	}
 
-	// 1. entry WITH trace context
+	// 1. entry WITH trace context + business fields
 	bridged.Info("hello world",
 		zap.String("trace_id", tid.String()),
 		zap.String("span_id", sid.String()),
+		zap.Int64("order_id", 12345),
+		zap.Bool("is_vip", true),
 	)
 	// 2. entry WITHOUT trace context (also forwarded, no span context)
 	bridged.Warn("untraced message")
@@ -65,6 +68,26 @@ func TestOtelLogBridge(t *testing.T) {
 	}
 	if r.Severity() != log.SeverityInfo1 {
 		t.Errorf("severity = %v, want Info", r.Severity())
+	}
+
+	// business fields must surface as OTLP attributes (trace_id/span_id are
+	// excluded — they travel via the span context)
+	gotAttrs := map[string]any{}
+	r.WalkAttributes(func(kv attribute.KeyValue) bool {
+		gotAttrs[string(kv.Key)] = kv.Value.String()
+		return true
+	})
+	if v, ok := gotAttrs["order_id"]; !ok || v != "12345" {
+		t.Errorf("order_id attribute = %v (%v), want \"12345\"", v, ok)
+	}
+	if v, ok := gotAttrs["is_vip"]; !ok || v != "true" {
+		t.Errorf("is_vip attribute = %v (%v), want \"true\"", v, ok)
+	}
+	if _, ok := gotAttrs["trace_id"]; ok {
+		t.Errorf("trace_id must not become an attribute")
+	}
+	if _, ok := gotAttrs["span_id"]; ok {
+		t.Errorf("span_id must not become an attribute")
 	}
 
 	// trace context travels via the Emit ctx (Logs Bridge API)
