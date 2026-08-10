@@ -53,16 +53,22 @@ func TestGatewayIdentitySetsContext(t *testing.T) {
 	}
 }
 
-// TestAccessLogCapturesRequestResponse verifies that the access log includes
-// query, request body and response body while downstream handlers still see
-// the original request body.
-func TestAccessLogCapturesRequestResponse(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
+// accessTestLogger builds an in-memory JSON zap logger for middleware tests.
+func accessTestLogger() (*zap.Logger, *bytes.Buffer) {
 	var buf bytes.Buffer
 	encCfg := zap.NewProductionEncoderConfig()
 	core := zapcore.NewCore(zapcore.NewJSONEncoder(encCfg), zapcore.AddSync(&buf), zapcore.InfoLevel)
-	log := zap.New(core)
+	return zap.New(core), &buf
+}
+
+// TestAccessLogCapturesRequestResponse verifies that the access log includes
+// query, request body and response body while downstream handlers still see
+// the original request body. Sample rate 1 = always log.
+func TestAccessLogCapturesRequestResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("HTTP_LOG_BODY_SAMPLE_RATE", "1")
+
+	log, buf := accessTestLogger()
 
 	r := gin.New()
 	r.Use(telemetry.UnifiedRequestID())
@@ -104,5 +110,111 @@ func TestAccessLogCapturesRequestResponse(t *testing.T) {
 	if !strings.Contains(line, `"resp_body":"{\"echo\":\"iphone\",\"id\":7}"`) &&
 		!strings.Contains(line, `"resp_body":"{\"id\":7,\"echo\":\"iphone\"}"`) {
 		t.Errorf("resp_body not captured correctly, got: %s", line)
+	}
+}
+
+// TestAccessLogSamples200Bodies verifies that 200 responses drop the bodies
+// at sample rate 0 while the core request fields stay logged.
+func TestAccessLogSamples200Bodies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("HTTP_LOG_BODY_SAMPLE_RATE", "0")
+
+	log, buf := accessTestLogger()
+
+	r := gin.New()
+	r.Use(AccessLog(log))
+	r.GET("/api/ok", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/ok?debug=1", nil)
+	r.ServeHTTP(w, req)
+
+	line := buf.String()
+	for _, want := range []string{`"method":"GET"`, `"query":"debug=1"`, `"status":200`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("access log missing %s, got: %s", want, line)
+		}
+	}
+	if strings.Contains(line, "req_body") || strings.Contains(line, "resp_body") {
+		t.Errorf("200 at sample rate 0 must not log bodies, got: %s", line)
+	}
+}
+
+// TestAccessLogFullBodiesOnError verifies that non-200 responses always log
+// bodies in full, even at sample rate 0.
+func TestAccessLogFullBodiesOnError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("HTTP_LOG_BODY_SAMPLE_RATE", "0")
+
+	log, buf := accessTestLogger()
+
+	r := gin.New()
+	r.Use(AccessLog(log))
+	r.POST("/api/fail", func(c *gin.Context) {
+		c.String(http.StatusInternalServerError, "boom")
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/fail",
+		strings.NewReader(`{"bad":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	line := buf.String()
+	for _, want := range []string{`"req_body":"{\"bad\":1}"`, `"resp_body":"boom"`, `"status":500`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("non-200 must log bodies in full, missing %s, got: %s", want, line)
+		}
+	}
+}
+
+// TestAccessLogSkipsBinaryBody verifies that non-text request bodies
+// (multipart uploads) are not logged.
+func TestAccessLogSkipsBinaryBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("HTTP_LOG_BODY_SAMPLE_RATE", "1")
+
+	log, buf := accessTestLogger()
+
+	r := gin.New()
+	r.Use(AccessLog(log))
+	r.POST("/api/upload", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/upload",
+		strings.NewReader("--boundary\r\n...binary..."))
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+	r.ServeHTTP(w, req)
+
+	line := buf.String()
+	if strings.Contains(line, "req_body") {
+		t.Errorf("binary request body must be skipped, got: %s", line)
+	}
+}
+
+// TestAccessLogTruncatesLargeBodies verifies the safety cap: bodies larger
+// than HTTP_LOG_BODY_MAX_BYTES are truncated with a marker.
+func TestAccessLogTruncatesLargeBodies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("HTTP_LOG_BODY_SAMPLE_RATE", "1")
+	t.Setenv("HTTP_LOG_BODY_MAX_BYTES", "16")
+
+	log, buf := accessTestLogger()
+
+	r := gin.New()
+	r.Use(AccessLog(log))
+	r.POST("/api/big", func(c *gin.Context) {
+		c.String(http.StatusBadRequest, "error response is long enough to exceed the cap")
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/big",
+		strings.NewReader(`{"payload":"0123456789abcdefghij"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	line := buf.String()
+	if !strings.Contains(line, "...(truncated)") {
+		t.Errorf("oversized bodies must carry the truncation marker, got: %s", line)
 	}
 }
