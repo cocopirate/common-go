@@ -7,9 +7,9 @@
 // zap does not pass a context.Context into its core.Write, so the bridge
 // reads trace_id/span_id from the zap fields themselves (added by callers
 // via logx.TraceFields or the unified access-log middleware) and rebuilds a
-// span context to hand to Emit. Entries without trace context are left on
-// stdout only — they stay in the container log pipeline (Logtail → SLS) but
-// are not duplicated into the trace-correlated store.
+// span context to hand to Emit. Entries without trace context are forwarded
+// too (with an empty span context), so SLS receives the full log stream even
+// when no Logtail is deployed; stdout output is preserved for both cases.
 //
 // Note: this targets the OTel Go Logs Bridge API (otel/log + sdk/log v0.21.0
 // paired with otel v1.45.0), where trace context travels via the Emit ctx
@@ -20,6 +20,7 @@ package telemetry
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -44,7 +45,9 @@ import (
 //  1. OTEL_EXPORTER_OTLP_ENDPOINT (shared with traces/metrics)
 //  2. ALIYUN_OTEL_LOG_ENDPOINT
 //  3. ALIYUN_OTEL_TRACE_ENDPOINT — the same Alibaba Cloud collector accepts
-//     all three signals, so an explicit log endpoint is optional.
+//     all three signals, so an explicit log endpoint is optional. When the
+//     trace endpoint is reused, its signal path is rewritten from
+//     /api/otlp/traces to /api/otlp/logs.
 func SetupLogs(serviceName string, log *zap.Logger) (func(), log.Logger) {
 	if log == nil {
 		log = zap.NewNop()
@@ -61,7 +64,7 @@ func SetupLogs(serviceName string, log *zap.Logger) (func(), log.Logger) {
 			endpoint = ep
 		} else if ep, ok := ReadAliyunTraceConfig(); ok {
 			log.Warn("ALIYUN_OTEL_LOG_ENDPOINT not set — reusing trace endpoint for logs")
-			endpoint = ep
+			endpoint = logsEndpointFromTrace(ep)
 		} else {
 			log.Warn("OTEL_BACKEND=aliyun but no OTLP endpoint — log export disabled")
 			return func() {}, nil
@@ -184,9 +187,6 @@ func (c *otelLogCore) forward(entry zapcore.Entry, fields []zapcore.Field) {
 	all = append(all, fields...)
 
 	traceID, spanID := traceIDsFromFields(all)
-	if !traceID.IsValid() {
-		return // 无 trace 上下文, 保持 stdout 单通道
-	}
 
 	r := &log.Record{}
 	r.SetTimestamp(entry.Time)
@@ -196,12 +196,26 @@ func (c *otelLogCore) forward(entry zapcore.Entry, fields []zapcore.Field) {
 	r.SetBody(attribute.StringValue(entry.Message))
 
 	// Trace 上下文通过 Emit 的 ctx 传递 (Logs Bridge API)。
-	sc := trace.NewSpanContext(trace.SpanContextConfig{
-		TraceID:    traceID,
-		SpanID:     spanID,
-		TraceFlags: trace.FlagsSampled,
-	})
-	c.logger.Emit(trace.ContextWithSpanContext(context.Background(), sc), *r)
+	// 无 trace 上下文的日志同样转发 (空 span context), 保证不装
+	// Logtail 时 SLS 也能全量收到日志; 带 trace 的日志可与链路关联。
+	ctx := context.Background()
+	if traceID.IsValid() {
+		sc := trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID:    traceID,
+			SpanID:     spanID,
+			TraceFlags: trace.FlagsSampled,
+		})
+		ctx = trace.ContextWithSpanContext(ctx, sc)
+	}
+	c.logger.Emit(ctx, *r)
+}
+
+// logsEndpointFromTrace derives the OTLP log endpoint from the trace
+// endpoint: the same Alibaba Cloud collector accepts all three signals,
+// only the signal path differs (/api/otlp/traces → /api/otlp/logs).
+// Returns the input unchanged when the path cannot be matched.
+func logsEndpointFromTrace(traceEndpoint string) string {
+	return strings.Replace(traceEndpoint, "/api/otlp/traces", "/api/otlp/logs", 1)
 }
 
 // traceIDsFromFields scans zap fields for the trace_id/span_id string values
