@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/cocopirate/common-go/logx v0.1.1
-	github.com/cocopirate/common-go/telemetry v0.1.4
+	github.com/cocopirate/common-go/telemetry v0.1.6
 	github.com/gin-contrib/cors v1.7.7
 	github.com/gin-gonic/gin v1.12.0
 )
