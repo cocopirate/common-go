@@ -1,12 +1,15 @@
 // Package logx provides shared logging utilities: a standardised zap logger
-// factory and helpers for masking sensitive data before debug logging.
+// factory, trace-correlation helpers and helpers for masking sensitive data
+// before debug logging.
 package logx
 
 import (
+	"context"
 	"net/http"
 	"regexp"
 	"strings"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -37,6 +40,28 @@ func NewLogger(debug bool) *zap.Logger {
 	}
 	log, _ := cfg.Build()
 	return log
+}
+
+// TraceFields extracts trace_id and span_id from ctx for log correlation.
+// Returns nil when ctx has no active span — the log entry simply carries no
+// trace fields. Used together with WithTrace so every log line can be joined
+// to its trace in SLS / Grafana.
+func TraceFields(ctx context.Context) []zap.Field {
+	span := trace.SpanFromContext(ctx)
+	sc := span.SpanContext()
+	if !sc.IsValid() {
+		return nil
+	}
+	return []zap.Field{
+		zap.String("trace_id", sc.TraceID().String()),
+		zap.String("span_id", sc.SpanID().String()),
+	}
+}
+
+// WithTrace prepends trace_id/span_id extracted from ctx to fields.
+// Usage: log.Info("msg", logx.WithTrace(ctx, zap.String("key", "val"))...)
+func WithTrace(ctx context.Context, fields ...zap.Field) []zap.Field {
+	return append(TraceFields(ctx), fields...)
 }
 
 // MaskHeaders formats an http.Header into a human-readable string with

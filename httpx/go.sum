@@ -12,6 +12,8 @@ github.com/cloudwego/base64x v0.1.7 h1:NppS+Fgzg5ovhn4NkUXaDT3x9jldgH5ToMCqzBSi2
 github.com/cloudwego/base64x v0.1.7/go.mod h1:Cu1PV9zfrSf7ET2tIbWbbEy7jO7HHJ13q4X2SQ8aWYg=
 github.com/cocopirate/common-go/authx v0.1.5 h1:TVgwNB9SdArUpNZPG3GoBsvfVLPjUCcBTWba4rkmRXM=
 github.com/cocopirate/common-go/authx v0.1.5/go.mod h1:bist9FzlMZNpMyHVeM9q97JG6M2D0XaWvK3+yp4pStE=
+github.com/cocopirate/common-go/logx v0.1.1 h1:4r7WHFv23aL3ncH+Fp+7XbYJY9hUhag3DMGjMcM1NOY=
+github.com/cocopirate/common-go/logx v0.1.1/go.mod h1:EGrmui9nubg2ge26cXaYedhR7hP0w9qBO0AHessUanc=
 github.com/cocopirate/common-go/telemetry v0.1.0 h1:qdSVEg9cE7ch3o0ZIS9ysFJlQjcNmgBJctoCKEo4Lg0=
 github.com/cocopirate/common-go/telemetry v0.1.0/go.mod h1:+MiN+gLR4Gh5IprWJavAXYhdTmuaUKxJucIHrSXt3lQ=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
@@ -134,6 +136,7 @@ golang.org/x/net v0.55.0/go.mod h1:L5U2KuzuOe1lY7Z+aWVIKK6qEeJXnXV9yzGA+WCHJww=
 golang.org/x/sys v0.45.0 h1:dO4czNzziLiiXplLQgBCEpCvXQ3dnkn0SdaZSYdQ+FY=
 golang.org/x/sys v0.45.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
 golang.org/x/text v0.38.0 h1:sXmwo9DwP3OK9EZ7PqAdaooSGozfl/3a6/xJcbzPRhE=
+golang.org/x/text v0.38.0/go.mod h1:YXZt3QhHUKYT53r2lLKFIVi6Ao1jdzrTR/KQ09qyxF4=
 gonum.org/v1/gonum v0.17.0 h1:VbpOemQlsSMrYmn7T2OUvQ4dqxQXU+ouZFQsZOx50z4=
 gonum.org/v1/gonum v0.17.0/go.mod h1:El3tOrEuMpv2UdMrbNlKEh9vd86bmQ6vqIcDwxEOc1E=
 google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa h1:Kjn0N0tCrDgiAFW+lGO4JZ3ck44CehvJQMAwj9QF0G8=
