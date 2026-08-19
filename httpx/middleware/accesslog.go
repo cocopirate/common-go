@@ -28,6 +28,8 @@ var accessLogSensitiveFields = []string{
 // body 记录策略（通过环境变量配置）:
 //   - HTTP_LOG_BODY_SAMPLE_RATE (0..1, 默认 0.01): 仅对 200 (及 <400) 响应按概率记录 body
 //   - HTTP_LOG_BODY_MAX_BYTES (默认 1048576 = 1 MiB): 单条 body 安全上限, 超限截断并标记 _truncated
+//   - HTTP_LOG_SKIP_PATHS (默认 "/health,/health/ready,/metrics"): 逗号分隔的路径前缀,
+//     命中的请求 (如 K8s/容器健康探活) 完全不打访问日志
 //
 // 非 200 (>=400) 响应始终全量记录 body，不受采样率限制。
 // multipart/二进制 body 一律跳过，敏感字段 (password/token/secret...) 自动脱敏。
@@ -36,8 +38,17 @@ func AccessLog(log *zap.Logger) gin.HandlerFunc {
 	sampleRate := envFloat("HTTP_LOG_BODY_SAMPLE_RATE", 0.01)
 	maxBytes := envInt("HTTP_LOG_BODY_MAX_BYTES", 1<<20) // 1 MiB
 	re := sensitiveRegex(accessLogSensitiveFields)
+	skipPaths := envSlice("HTTP_LOG_SKIP_PATHS", "/health,/health/ready,/metrics")
 
 	return func(c *gin.Context) {
+		// 探活路径 (health checks) 不打访问日志, 避免刷屏干扰日志观察
+		for _, p := range skipPaths {
+			if strings.HasPrefix(c.Request.URL.Path, p) {
+				c.Next()
+				return
+			}
+		}
+
 		start := time.Now()
 
 		// 捕获请求体（multipart 跳过；完整读取后恢复，不影响下游 handler）
@@ -178,4 +189,18 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+func envSlice(key, def string) []string {
+	v := os.Getenv(key)
+	if v == "" {
+		v = def
+	}
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
