@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -197,5 +199,61 @@ func TestVerifyResponse_WhitespaceStripping(t *testing.T) {
 	err := signer.VerifyResponse(body, validSig)
 	if err != nil {
 		t.Fatalf("expected verification to succeed after whitespace stripping, got: %v", err)
+	}
+}
+
+func TestSignJSONRequest_CanonicalRequestAndHash(t *testing.T) {
+	priv, pub := testKeyPair()
+	creds := &ParsedCredentials{
+		AppKey:     "test_app_key",
+		PrivateKey: priv,
+		PublicKey:  pub,
+	}
+
+	fixedTime := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	signer := NewSigner(creds)
+	signer.now = func() time.Time { return fixedTime }
+
+	body := []byte(`{"merchantNo":"10093626404"}`)
+	apiPath := "/rest/v1.0/settle/settle-way/modify-ratio"
+
+	result, err := signer.SignJSONRequest("POST", apiPath, body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 1. x-yop-content-sha256 header must equal the body's SHA256 hex
+	wantHash := fmt.Sprintf("%x", sha256.Sum256(body))
+	if got := result.Headers[HeaderYopContentSha256]; got != wantHash {
+		t.Errorf("x-yop-content-sha256 = %q, want %q", got, wantHash)
+	}
+
+	// 2. Canonical request: auth_str\nPOST\npath\n<empty query>\nheaders
+	authStr := fmt.Sprintf("%s/%s/%s/%s",
+		ProtocolVersion, creds.AppKey, fixedTime.UTC().Format(TimestampFormat), ExpiredSeconds)
+	wantCRPrefix := authStr + "\nPOST\n" + apiPath + "\n\nx-yop-appkey:" + url.QueryEscape(creds.AppKey)
+	if !strings.HasPrefix(result.CanonicalRequest, wantCRPrefix) {
+		t.Errorf("canonical request should start with %q,\ngot %q", wantCRPrefix, result.CanonicalRequest)
+	}
+	if !strings.Contains(result.CanonicalRequest, "x-yop-content-sha256:"+url.QueryEscape(wantHash)) {
+		t.Errorf("canonical request should contain x-yop-content-sha256, got:\n%s", result.CanonicalRequest)
+	}
+
+	// 3. Authorization must include the content-sha256 signed headers
+	auth := result.Headers[HeaderAuthorization]
+	if !strings.Contains(auth, "x-yop-appkey;x-yop-content-sha256;x-yop-request-id") {
+		t.Errorf("Authorization should list signed headers with content-sha256, got %q", auth)
+	}
+
+	// 4. Signature verifies against the canonical request with the public key
+	parts := strings.Split(auth, "/")
+	sigB64 := strings.TrimSuffix(parts[len(parts)-1], "$SHA256")
+	sigBytes, err := decodeBase64(sigB64)
+	if err != nil {
+		t.Fatalf("decode signature: %v", err)
+	}
+	crHash := sha256.Sum256([]byte(result.CanonicalRequest))
+	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, crHash[:], sigBytes); err != nil {
+		t.Errorf("signature does not verify against canonical request: %v", err)
 	}
 }

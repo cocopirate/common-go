@@ -1,6 +1,7 @@
 package yop
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -84,6 +85,40 @@ func (c *Client) PostForm(ctx context.Context, apiPath string, params map[string
 	return c.doRequest(ctx, "POST", apiPath, params)
 }
 
+// PostJSON performs a signed POST request with an application/json body.
+// The body must already be serialized (the caller controls the JSON layout);
+// its SHA256 is carried in the x-yop-content-sha256 header (Python SDK
+// post_json / json_param=True flow).
+func (c *Client) PostJSON(ctx context.Context, apiPath string, body []byte) ([]byte, error) {
+	signResult, err := c.signer.SignJSONRequest("POST", apiPath, body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build URL
+	reqURL := c.config.ServerRoot + apiPath
+
+	// Build request
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("yop: create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Add signed headers
+	for k, v := range signResult.Headers {
+		req.Header.Set(k, v)
+	}
+
+	// Execute
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("yop: request failed: %w", err)
+	}
+
+	return c.handleResponse(resp, "POST", reqURL)
+}
+
 // doRequest performs a signed request and returns the raw response body.
 func (c *Client) doRequest(ctx context.Context, method, apiPath string, params map[string]string) ([]byte, error) {
 	// Generate signature
@@ -132,6 +167,13 @@ func (c *Client) doRequest(ctx context.Context, method, apiPath string, params m
 	if err != nil {
 		return nil, fmt.Errorf("yop: request failed: %w", err)
 	}
+
+	return c.handleResponse(resp, method, reqURL)
+}
+
+// handleResponse reads the response body, logs it, checks the HTTP status and
+// verifies the response signature. Shared by all request methods.
+func (c *Client) handleResponse(resp *http.Response, method, reqURL string) ([]byte, error) {
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)

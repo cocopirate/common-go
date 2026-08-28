@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"sort"
@@ -42,16 +43,15 @@ type SignResult struct {
 
 // SignRequest generates the Yop-Auth-V2 signature for a request.
 // This mirrors Python's SigV3Authenticator.generate_signature().
-// Currently supports GET requests with query params.
+// Supports GET requests with query params, and form POSTs (params are both
+// signed as the query string and sent as the form body).
 func (s *YopSigner) SignRequest(
 	httpMethod, apiPath string,
 	queryParams map[string]string,
 ) (*SignResult, error) {
 
 	// 1. Build auth string: protocol_version/app_key/timestamp/expired_seconds
-	yopDate := s.now().UTC().Format(TimestampFormat)
-	authStr := fmt.Sprintf("%s/%s/%s/%s",
-		ProtocolVersion, s.appKey, yopDate, ExpiredSeconds)
+	authStr := s.buildAuthStr()
 
 	// 2. Build sorted query string (matching Python's get_query_str)
 	queryStr := buildCanonicalQuery(queryParams)
@@ -72,7 +72,48 @@ func (s *YopSigner) SignRequest(
 	canonicalRequest := fmt.Sprintf("%s\n%s\n%s\n%s\n%s",
 		authStr, httpMethod, apiPath, queryStr, canonicalHeaderStr)
 
-	// 6. Sign: SHA256 → RSA PKCS1_v1_5 → Base64 RawURL (matching Python's encode_base64)
+	return s.finishSign(authStr, canonicalRequest, requestID, signedHeaders, nil)
+}
+
+// SignJSONRequest generates the Yop-Auth-V2 signature for an application/json request.
+// Mirrors Python's SigV3Authenticator.generate_signature(json_param=True):
+// the query string is empty and the body's SHA256 is carried in the
+// x-yop-content-sha256 header, which participates in the canonical headers.
+func (s *YopSigner) SignJSONRequest(httpMethod, apiPath string, body []byte) (*SignResult, error) {
+	authStr := s.buildAuthStr()
+
+	// Body SHA256 → x-yop-content-sha256 header (Python: content_sha256()).
+	contentSHA256 := hex.EncodeToString(sha256Sum(body))
+
+	requestID := uuid.New().String()
+
+	// Python: canonical_header_str includes x-yop-content-sha256 for json requests,
+	// signed_headers becomes 'x-yop-appkey;x-yop-content-sha256;x-yop-request-id'.
+	canonicalHeaderStr := fmt.Sprintf("x-yop-appkey:%s\nx-yop-content-sha256:%s\nx-yop-request-id:%s",
+		url.QueryEscape(s.appKey),
+		url.QueryEscape(contentSHA256),
+		url.QueryEscape(requestID))
+	signedHeaders := "x-yop-appkey;x-yop-content-sha256;x-yop-request-id"
+
+	// query_str is empty for json requests → blank line in the canonical request.
+	canonicalRequest := fmt.Sprintf("%s\n%s\n%s\n\n%s",
+		authStr, httpMethod, apiPath, canonicalHeaderStr)
+
+	return s.finishSign(authStr, canonicalRequest, requestID, signedHeaders,
+		map[string]string{HeaderYopContentSha256: contentSHA256})
+}
+
+// buildAuthStr builds the auth string: yop-auth-v2/{appKey}/{timestamp}/{1800}.
+func (s *YopSigner) buildAuthStr() string {
+	yopDate := s.now().UTC().Format(TimestampFormat)
+	return fmt.Sprintf("%s/%s/%s/%s",
+		ProtocolVersion, s.appKey, yopDate, ExpiredSeconds)
+}
+
+// finishSign computes the RSA signature, assembles the Authorization header
+// and merges any extra headers (e.g. x-yop-content-sha256).
+func (s *YopSigner) finishSign(authStr, canonicalRequest, requestID, signedHeaders string, extraHeaders map[string]string) (*SignResult, error) {
+	// Sign: SHA256 → RSA PKCS1_v1_5 → Base64 RawURL (matching Python's encode_base64)
 	hash := sha256.Sum256([]byte(canonicalRequest))
 	sigBytes, err := rsa.SignPKCS1v15(rand.Reader, s.privateKey, crypto.SHA256, hash[:])
 	if err != nil {
@@ -80,7 +121,7 @@ func (s *YopSigner) SignRequest(
 	}
 	encodedSig := encodeBase64(sigBytes)
 
-	// 7. Build Authorization header
+	// Build Authorization header
 	//    Python: algorithm + ' ' + auth_str + '/' + signed_headers + '/' + signature
 	//    Then: headers['authorization'] = authorization_header + '$' + hash_algorithm
 	authorization := fmt.Sprintf("%s %s/%s/%s$%s",
@@ -93,11 +134,20 @@ func (s *YopSigner) SignRequest(
 		HeaderYopSessionID:  s.sessionID,
 		HeaderUserAgent:     "opengo-yop-sdk/1.0",
 	}
+	for k, v := range extraHeaders {
+		headers[k] = v
+	}
 
 	return &SignResult{
 		Headers:          headers,
 		CanonicalRequest: canonicalRequest,
 	}, nil
+}
+
+// sha256Sum is a small alias so SignJSONRequest reads clearly; [32]byte → []byte.
+func sha256Sum(b []byte) []byte {
+	h := sha256.Sum256(b)
+	return h[:]
 }
 
 // buildCanonicalQuery builds the sorted, URL-encoded query string for the canonical request.
