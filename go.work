@@ -6,6 +6,7 @@ use (
 	./dbx
 	./httpx
 	./logx
+	./ossx
 	./redisx
 	./telemetry
 	./yop
@@ -20,6 +21,8 @@ replace github.com/cocopirate/common-go/dbx v0.1.1 => ./dbx
 replace github.com/cocopirate/common-go/httpx v0.1.7 => ./httpx
 
 replace github.com/cocopirate/common-go/logx v0.1.2 => ./logx
+
+replace github.com/cocopirate/common-go/ossx v0.1.0 => ./ossx
 
 replace github.com/cocopirate/common-go/redisx v0.1.0 => ./redisx
 

@@ -13,6 +13,7 @@
 | `dbx` | 数据库连接、GORM 配置和迁移辅助能力。 |
 | `httpx` | HTTP server、Gin middleware、统一响应和公开路由辅助能力。 |
 | `logx` | Zap 日志初始化和日志字段辅助方法。 |
+| `ossx` | 阿里云 OSS 签名 URL 与公共域名 URL 辅助方法。 |
 | `redisx` | Redis client 创建和配置辅助方法。 |
 | `telemetry` | Request ID、指标、OpenTelemetry 和 Gin span 支持。 |
 
@@ -24,6 +25,7 @@ bootstrap/   # 服务生命周期辅助包
 dbx/         # 数据库与迁移辅助包
 httpx/       # HTTP 服务、响应与中间件辅助包
 logx/        # 日志辅助包
+ossx/        # 阿里云 OSS 辅助包
 redisx/      # Redis 辅助包
 telemetry/   # 链路追踪与指标辅助包
 go.work      # 本地多模块工作区
@@ -41,13 +43,13 @@ go.work      # 本地多模块工作区
 在 `common-go` 目录下运行测试：
 
 ```bash
-go test ./authx/... ./bootstrap/... ./dbx/... ./httpx/... ./logx/... ./redisx/... ./telemetry/...
+go test ./authx/... ./bootstrap/... ./dbx/... ./httpx/... ./logx/... ./ossx/... ./redisx/... ./telemetry/...
 ```
 
 格式化变更过的包：
 
 ```bash
-go fmt ./authx/... ./bootstrap/... ./dbx/... ./httpx/... ./logx/... ./redisx/... ./telemetry/...
+go fmt ./authx/... ./bootstrap/... ./dbx/... ./httpx/... ./logx/... ./ossx/... ./redisx/... ./telemetry/...
 ```
 
 服务仓库通过 `go.work` 中的 `replace` 指向本地 `common-go` 包，方便联调。独立发布时，请为变更的包打版本标签，并在服务仓库中升级依赖版本，避免长期依赖本地 `replace`。
