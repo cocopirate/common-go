@@ -17,10 +17,13 @@ import (
 )
 
 // 默认敏感字段 — 与 telemetry/ginspan 保持一致。
+// 脱敏字段按 JSON key 精确匹配。注意这里**不能**放 "code"：它是平台响应信封的
+// 业务码字段，加了会把每个响应的 code 都打成 ***。短信验证码用 "otp" 这个 key
+// (sms-service / auth-service 的模板参数名同为 otp)，因此只有它需要在此登记。
 var accessLogSensitiveFields = []string{
 	"password", "passwd", "secret", "token", "access_token", "refresh_token",
 	"api_key", "apikey", "authorization", "sign", "signature", "key",
-	"old_password", "new_password", "credential",
+	"old_password", "new_password", "credential", "otp",
 }
 
 // AccessLog 统一访问日志中间件：记录请求基本信息，并按策略记录请求/响应 body。
