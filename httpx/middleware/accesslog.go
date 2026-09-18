@@ -16,14 +16,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// 默认敏感字段 — 与 telemetry/ginspan 保持一致。
+// 默认敏感字段 — 与 telemetry/ginspan 保持一致 (两处同增同减)。
 // 脱敏字段按 JSON key 精确匹配。注意这里**不能**放 "code"：它是平台响应信封的
 // 业务码字段，加了会把每个响应的 code 都打成 ***。短信验证码用 "otp" 这个 key
 // (sms-service / auth-service 的模板参数名同为 otp)，因此只有它需要在此登记。
+// "mobile" 是手机号：短信链路两端 (/api/v1/auth/sms-code 与 sms-service 的
+// POST /internal/v1/sms/messages) 都用这个名字传递号码，而 >=400 的请求体
+// 不采样全量记录 —— 不登记就是明文号码进日志。
 var accessLogSensitiveFields = []string{
 	"password", "passwd", "secret", "token", "access_token", "refresh_token",
 	"api_key", "apikey", "authorization", "sign", "signature", "key",
-	"old_password", "new_password", "credential", "otp",
+	"old_password", "new_password", "credential", "otp", "mobile",
 }
 
 // AccessLog 统一访问日志中间件：记录请求基本信息，并按策略记录请求/响应 body。

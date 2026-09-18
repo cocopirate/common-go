@@ -132,7 +132,7 @@ func TestAccessLogSensitiveFieldsMasked(t *testing.T) {
 	os.Setenv("HTTP_LOG_BODY_SAMPLE_RATE", "1")
 	defer os.Unsetenv("HTTP_LOG_BODY_SAMPLE_RATE")
 	log, cap := newTestLogger()
-	doRequest(t, log, `{"username":"bob","password":"super-secret"}`, nil)
+	doRequest(t, log, `{"username":"bob","password":"super-secret","mobile":"13800138000","otp":"123456"}`, nil)
 	m := lastLogEntry(t, cap)
 	body, _ := m["req_body"].(string)
 	if strings.Contains(body, "super-secret") {
@@ -143,6 +143,11 @@ func TestAccessLogSensitiveFieldsMasked(t *testing.T) {
 	}
 	if !strings.Contains(body, "bob") {
 		t.Errorf("non-sensitive username should be preserved, got %q", body)
+	}
+	// The SMS chain carries a phone number in mobile and the code in otp; both
+	// appear in bodies this middleware records in full on a >=400 response.
+	if strings.Contains(body, "13800138000") || strings.Contains(body, "123456") {
+		t.Errorf("mobile and otp must be masked, got %q", body)
 	}
 }
 
