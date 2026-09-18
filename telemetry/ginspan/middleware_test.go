@@ -96,14 +96,16 @@ func TestMiddlewarePreservesLargeRequestBody(t *testing.T) {
 	}
 }
 
-// The SMS chain puts a phone number in mobile and the code in otp, and this
-// middleware copies request bodies onto spans — so the default set has to mask
-// both, exactly as httpx/middleware's access log does.
+// The SMS chain puts a phone number in mobile and the code in verify_code, and
+// this middleware copies request bodies onto spans — so the default set has to
+// mask both, exactly as httpx/middleware's access log does. The param is not
+// called "code": that is the response envelope's business-code field, and
+// masking it would blank the code of every response.
 func TestDefaultSensitiveFieldsMaskSmsBody(t *testing.T) {
 	re := sensitiveRegex(defaultConfig().sensitiveFields)
-	body := `{"mobile":"13800138000","template_code":"ADMIN_LOGIN_CODE","params":{"otp":"123456"}}`
+	body := `{"mobile":"13800138000","template_code":"ADMIN_LOGIN_CODE","params":{"verify_code":"123456"}}`
 	got := re.ReplaceAllString(body, `"$1":"***"`)
-	want := `{"mobile":"***","template_code":"ADMIN_LOGIN_CODE","params":{"otp":"***"}}`
+	want := `{"mobile":"***","template_code":"ADMIN_LOGIN_CODE","params":{"verify_code":"***"}}`
 	if got != want {
 		t.Fatalf("masked body = %s, want %s", got, want)
 	}

@@ -15,11 +15,14 @@ func defaultConfig() *config {
 	}
 	// 与 httpx/middleware 的 accessLogSensitiveFields 保持一致 (两处同增同减)：
 	// 同一份请求体既进访问日志、也进 span，只脱一处等于没脱。
-	// "otp" 是短信验证码、"mobile" 是手机号，两者都在短信链路的请求体里。
+	// "verify_code" 是短信验证码、"mobile" 是手机号，两者都在短信链路的请求体里。
+	// 验证码不叫 "code"：那是平台响应信封的业务码字段，登记进去会把每个响应的
+	// code 都打成 ***（详见 httpx 那份名单的注释）。"otp" 是它从前的名字，留着是
+	// 因为本库多项目共用。
 	for _, f := range []string{
 		"password", "passwd", "secret", "token", "access_token", "refresh_token",
 		"api_key", "apikey", "authorization", "sign", "signature", "key",
-		"old_password", "new_password", "credential", "otp", "mobile",
+		"old_password", "new_password", "credential", "otp", "verify_code", "mobile",
 	} {
 		c.sensitiveFields[f] = struct{}{}
 	}
