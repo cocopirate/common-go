@@ -96,6 +96,19 @@ func TestMiddlewarePreservesLargeRequestBody(t *testing.T) {
 	}
 }
 
+// The SMS chain puts a phone number in mobile and the code in otp, and this
+// middleware copies request bodies onto spans — so the default set has to mask
+// both, exactly as httpx/middleware's access log does.
+func TestDefaultSensitiveFieldsMaskSmsBody(t *testing.T) {
+	re := sensitiveRegex(defaultConfig().sensitiveFields)
+	body := `{"mobile":"13800138000","template_code":"ADMIN_LOGIN_CODE","params":{"otp":"123456"}}`
+	got := re.ReplaceAllString(body, `"$1":"***"`)
+	want := `{"mobile":"***","template_code":"ADMIN_LOGIN_CODE","params":{"otp":"***"}}`
+	if got != want {
+		t.Fatalf("masked body = %s, want %s", got, want)
+	}
+}
+
 func recordingSpanMiddleware() gin.HandlerFunc {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
 	tracer := tp.Tracer("ginspan-test")

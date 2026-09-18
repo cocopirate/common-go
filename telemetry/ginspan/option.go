@@ -13,10 +13,13 @@ func defaultConfig() *config {
 		maxBodySize:     4096,
 		sensitiveFields: make(map[string]struct{}),
 	}
+	// 与 httpx/middleware 的 accessLogSensitiveFields 保持一致 (两处同增同减)：
+	// 同一份请求体既进访问日志、也进 span，只脱一处等于没脱。
+	// "otp" 是短信验证码、"mobile" 是手机号，两者都在短信链路的请求体里。
 	for _, f := range []string{
 		"password", "passwd", "secret", "token", "access_token", "refresh_token",
 		"api_key", "apikey", "authorization", "sign", "signature", "key",
-		"old_password", "new_password", "credential",
+		"old_password", "new_password", "credential", "otp", "mobile",
 	} {
 		c.sensitiveFields[f] = struct{}{}
 	}
