@@ -62,6 +62,9 @@ const DefaultTable = "job_task"
 // 业务数据只有两个去处: Payload (入队时的输入) 与 Summary (执行中的产出, 例如
 // 产物描述符与失败原因分组)。加业务列就要动表结构, 而 payload/summary 是 JSONB,
 // 加字段不用迁移 —— 这是这个模型能同时装下导出、同步、检测等多类任务的原因。
+//
+// OwnerUID 是唯一为"归属"开的一级列 (它本可以塞进 payload, 但那样没法建索引也没法
+// 在 SQL 里筛, 只能全表读出来在内存里过滤)。
 type Task struct {
 	ID     uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	Type   string    `gorm:"size:64;not null;index" json:"type"`
@@ -70,6 +73,10 @@ type Task struct {
 	// 之外运行, 没有 gin.Context 也没有网关身份头, 现算只会 fail-closed 或越权。
 	Payload JSONB   `gorm:"type:jsonb" json:"payload"`
 	Error   *string `gorm:"type:text" json:"error"`
+	// OwnerUID 是任务的归属 (发起人的 X-User-ID), 空表示"没有发起人的系统任务"。
+	// 它决定谁能看见/下载这条任务 (见 OwnerScope), 所以**写入路径必须显式给值** ——
+	// Enqueue 把它做成必填位置参数就是为了让每个调用点表态, 而不是默默留空。
+	OwnerUID string `gorm:"column:owner_uid;size:64;index" json:"owner_uid,omitempty"`
 	// Attempts 每次认领 +1, 包含当前这次。重试判据是 attempts < MaxAttempts。
 	Attempts int `gorm:"not null;default:0" json:"attempts"`
 	// 进度四件套 + Summary: 由 Reporter 或 handler 直接写。TotalCount 为 0 时前端

@@ -28,8 +28,10 @@ const ArtifactTTL = 15 * time.Minute
 // 权限与数据范围**不在这里**: 各服务用各自的权限码挂在路由上, 数据范围规则也归服务
 // (队列不知道"导出申诉"该按什么过滤)。本包只保证同一套任务表在各地被同样地读出来。
 //
-// 已知边界: 这里不校验任务归属 —— 有权限码的人能看到/下载该表里所有任务。多租户或
-// 按数据范围隔离的服务需要自己加一层 (按 owner 或 scope 过滤的 List/Get)。
+// 归属**在这里**: 四个端点都按 Owner 解出的范围过滤, 于是有权限码的人只看得到、只下载得了
+// 自己发起的任务 (或全部, 若他有绕过码)。这不是可选的装饰 —— 导出产物里是未脱敏的客户
+// 数据, 只看权限码的话, 任何一个拿到该码的账号都能列出并下载所有人的导出, 绕开服务侧
+// 刚做好的数据范围。
 type APIHandler[T any, PT Record[T]] struct {
 	q     *Queue[T, PT]
 	media Signer
@@ -37,6 +39,11 @@ type APIHandler[T any, PT Record[T]] struct {
 	// ErrCode 是"文件存储未配置"这类失败的业务码。jobx 不知道各服务的码段, 由服务赋值;
 	// 不设时回落到 response.UpstreamError (50001)。
 	ErrCode int
+
+	// Owner 解出每次请求的可见范围。**nil 表示这个服务不接入归属过滤** (行为与加这个字段
+	// 之前完全一致), 供尚未迁移的服务使用; 一旦设上, 四个端点全部强制过滤 —— 解不出范围
+	// 就是 403, 而不是"放行"。
+	Owner OwnerFunc
 }
 
 func NewAPIHandler[T any, PT Record[T]](q *Queue[T, PT], media Signer) *APIHandler[T, PT] {
@@ -48,6 +55,22 @@ func (h *APIHandler[T, PT]) errCode() int {
 		return response.UpstreamError
 	}
 	return h.ErrCode
+}
+
+// scope 解出本次请求的可见范围; 解不出时写好 403 并返回 ok=false。
+//
+// Owner 为 nil 映射成 ViewAll (保持未接入服务的行为), 而不是零值 —— 零值是"无效", 用它
+// 会让没配 Owner 的服务整个 403。
+func (h *APIHandler[T, PT]) scope(c *gin.Context) (OwnerScope, bool) {
+	if h.Owner == nil {
+		return OwnerScope{ViewAll: true}, true
+	}
+	own := h.Owner(c)
+	if !own.Valid() {
+		response.Forbidden(c, "task ownership cannot be resolved")
+		return OwnerScope{}, false
+	}
+	return own, true
 }
 
 // List 处理 GET <tasks> —— 可选 type/status 过滤, 分页。
@@ -66,10 +89,19 @@ func (h *APIHandler[T, PT]) List(c *gin.Context) {
 		return
 	}
 
+	// 身份只解一次: 它不随查询链变化, 而 base() 会被调用两次 (Count 与 Find)。
+	own, ok := h.scope(c)
+	if !ok {
+		return
+	}
+
 	// 每次重新起链而不是复用一条 *gorm.DB: Count 会改写语句, 复用时后面的 Find 会带上
 	// Count 留下的痕迹 (GORM 的链式复用只有在 clone 打开时才安全, 不值得赌)。
+	//
+	// 归属谓词放在这个闭包里 —— 它是两条语句唯一的共同起点, 因此 Count 与 Find 不可能
+	// 一个筛了一个没筛 (那样 total 会数出别家的任务数)。
 	base := func() *gorm.DB {
-		q := h.q.Model(c.Request.Context())
+		q := own.apply(h.q.Model(c.Request.Context()))
 		if v := c.Query("type"); v != "" {
 			q = q.Where("type = ?", v)
 		}
@@ -105,7 +137,17 @@ func (h *APIHandler[T, PT]) Get(c *gin.Context) {
 		response.BadRequest(c, "invalid task id")
 		return
 	}
-	rec, err := h.q.load(c.Request.Context(), id)
+	own, ok := h.scope(c)
+	if !ok {
+		return
+	}
+	rec, err := h.q.load(c.Request.Context(), id, own)
+	if errors.Is(err, ErrOwnerRequired) {
+		// 上面 scope 已经拦过一道; 这条是库层护栏自己的出口, 留着是为了它被单独调用时
+		// 报的是准确的错, 而不是伪装成 404。
+		response.Forbidden(c, "task ownership cannot be resolved")
+		return
+	}
 	if err != nil {
 		response.NotFound(c, "task not found")
 		return
@@ -132,12 +174,23 @@ func (h *APIHandler[T, PT]) Artifact(c *gin.Context) {
 		response.BadRequest(c, "invalid task id")
 		return
 	}
+	// 先解身份: 解不出来就 403, 连库都不碰。
+	own, ok := h.scope(c)
+	if !ok {
+		return
+	}
+	// 存储未配置排在读库之前。它对**所有**调用方一视同仁 (包括不存在的 id), 所以不是
+	// 存在性预言机; 而"没配文件存储"这种部署问题也轮不到按任务归属来回答。
 	if h.media == nil {
 		response.Fail(c, http.StatusServiceUnavailable, h.errCode(),
 			"media service is not configured: artifacts cannot be downloaded")
 		return
 	}
-	rec, err := h.q.load(c.Request.Context(), id)
+	rec, err := h.q.load(c.Request.Context(), id, own)
+	if errors.Is(err, ErrOwnerRequired) {
+		response.Forbidden(c, "task ownership cannot be resolved")
+		return
+	}
 	if err != nil {
 		response.NotFound(c, "task not found")
 		return
@@ -174,7 +227,11 @@ func (h *APIHandler[T, PT]) Cancel(c *gin.Context) {
 		response.BadRequest(c, "invalid task id")
 		return
 	}
-	switch err := h.q.Cancel(c.Request.Context(), id); {
+	own, ok := h.scope(c)
+	if !ok {
+		return
+	}
+	switch err := h.q.Cancel(c.Request.Context(), id, own); {
 	case err == nil:
 		response.OK(c, gin.H{"id": id, "status": StatusCancelled})
 	case errors.Is(err, ErrTaskRunning):
@@ -182,6 +239,8 @@ func (h *APIHandler[T, PT]) Cancel(c *gin.Context) {
 			"task is already running and cannot be cancelled")
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		response.NotFound(c, "task not found")
+	case errors.Is(err, ErrOwnerRequired):
+		response.Forbidden(c, "task ownership cannot be resolved")
 	default:
 		response.InternalServerError(c, err.Error())
 	}

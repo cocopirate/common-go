@@ -50,6 +50,7 @@ func newTestDB(t *testing.T, tables ...string) *gorm.DB {
 			status        TEXT,
 			payload       TEXT,
 			error         TEXT,
+			owner_uid     TEXT,
 			attempts      INTEGER DEFAULT 0,
 			total_count   INTEGER DEFAULT 0,
 			done_count    INTEGER DEFAULT 0,
@@ -74,9 +75,11 @@ func newQueue(t *testing.T) (*Queue[leadTestTask, *leadTestTask], *gorm.DB) {
 	return New[leadTestTask, *leadTestTask](db, nil), db
 }
 
+// mustEnqueue 入队一条**无主**任务 (owner_uid 为空字符串)。这里测的是队列机制 (认领、重试、
+// 退避、记账), 归属过滤由 owner_test.go 专门覆盖 —— 那些用例自己显式传 owner。
 func mustEnqueue(t *testing.T, q *Queue[leadTestTask, *leadTestTask], taskType string, payload any, total int) *leadTestTask {
 	t.Helper()
-	rec, err := q.EnqueueWithTotal(context.Background(), taskType, payload, total)
+	rec, err := q.EnqueueWithTotal(context.Background(), taskType, payload, total, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -96,7 +99,7 @@ func reload(t *testing.T, db *gorm.DB, id uuid.UUID) leadTestTask {
 // 重读行、attempts+1、置 running。用它可以完整验证重试策略 (claim 本身只能在 PG 上测)。
 func claimForTest(t *testing.T, q *Queue[leadTestTask, *leadTestTask], id uuid.UUID) *leadTestTask {
 	t.Helper()
-	rec, err := q.load(context.Background(), id)
+	rec, err := q.load(context.Background(), id, OwnerScope{ViewAll: true})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -487,7 +490,7 @@ func TestCancelPending(t *testing.T) {
 	q, db := newQueue(t)
 	rec := mustEnqueue(t, q, "export", nil, 0)
 
-	if err := q.Cancel(context.Background(), rec.ID); err != nil {
+	if err := q.Cancel(context.Background(), rec.ID, OwnerScope{ViewAll: true}); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 	row := reload(t, db, rec.ID)
@@ -504,7 +507,7 @@ func TestCancelRunningIsRefused(t *testing.T) {
 	rec := mustEnqueue(t, q, "export", nil, 0)
 	claimForTest(t, q, rec.ID)
 
-	if err := q.Cancel(context.Background(), rec.ID); !errors.Is(err, ErrTaskRunning) {
+	if err := q.Cancel(context.Background(), rec.ID, OwnerScope{ViewAll: true}); !errors.Is(err, ErrTaskRunning) {
 		t.Fatalf("cancel running = %v, want ErrTaskRunning", err)
 	}
 	if row := reload(t, db, rec.ID); row.Status != StatusRunning {
@@ -520,7 +523,7 @@ func TestCancelTerminalIsIdempotent(t *testing.T) {
 		t.Fatalf("force done: %v", err)
 	}
 
-	if err := q.Cancel(context.Background(), rec.ID); err != nil {
+	if err := q.Cancel(context.Background(), rec.ID, OwnerScope{ViewAll: true}); err != nil {
 		t.Fatalf("cancel a finished task = %v, want nil", err)
 	}
 	if row := reload(t, db, rec.ID); row.Status != StatusDone {
@@ -530,7 +533,7 @@ func TestCancelTerminalIsIdempotent(t *testing.T) {
 
 func TestCancelMissingTask(t *testing.T) {
 	q, _ := newQueue(t)
-	if err := q.Cancel(context.Background(), uuid.New()); !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := q.Cancel(context.Background(), uuid.New(), OwnerScope{ViewAll: true}); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("cancel missing = %v, want ErrRecordNotFound", err)
 	}
 }
@@ -597,7 +600,16 @@ func TestSchemaSQL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schema: %v", err)
 	}
-	for _, want := range []string{"CREATE TABLE IF NOT EXISTS job_task", "ix_job_task_status", "summary       JSONB NOT NULL"} {
+	// owner_uid 必须在这一串里: 各服务的迁移是照着 SchemaSQL 抄的, 而它与
+	// Task.OwnerUID 分处两个文件 —— 少了这条断言, 两边分叉要等到线上查询报
+	// "column owner_uid does not exist" 才会发现。
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS job_task",
+		"ix_job_task_status",
+		"summary       JSONB NOT NULL",
+		"owner_uid     VARCHAR(64) NOT NULL DEFAULT",
+		"ix_job_task_owner_created_at",
+	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("schema missing %q:\n%s", want, sql)
 		}
@@ -605,6 +617,29 @@ func TestSchemaSQL(t *testing.T) {
 	for _, bad := range []string{"", "Job_Task", "job-task", "job task", "job;drop", "1job"} {
 		if _, err := SchemaSQL(bad); err == nil {
 			t.Fatalf("SchemaSQL(%q) must be rejected: the name is interpolated into DDL", bad)
+		}
+	}
+}
+
+// TestSchemaSQLCoversEveryTaskColumn: SchemaSQL 是各服务写迁移时的抄写来源, 而真正被
+// GORM 读写的是 Task —— 两者分处两个文件。少了这道检查, 加一个字段却忘了改 schema 模板
+// 要等到线上 (或新服务的迁移) 报 "column ... does not exist" 才暴露。
+func TestSchemaSQLCoversEveryTaskColumn(t *testing.T) {
+	db := newTestDB(t, DefaultTable)
+	stmt := &gorm.Statement{DB: db}
+	if err := stmt.Parse(&Task{}); err != nil {
+		t.Fatalf("parse task schema: %v", err)
+	}
+	sql, err := SchemaSQL(DefaultTable)
+	if err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	for _, f := range stmt.Schema.Fields {
+		if f.DBName == "" {
+			continue
+		}
+		if !strings.Contains(sql, f.DBName) {
+			t.Fatalf("Task.%s (column %s) is missing from SchemaSQL", f.Name, f.DBName)
 		}
 	}
 }

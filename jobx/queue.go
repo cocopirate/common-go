@@ -96,21 +96,26 @@ func (q *Queue[T, PT]) newRecord() PT {
 }
 
 // Enqueue 入队一条任务, 不预设总量 (进度由 handler 自己报)。
-func (q *Queue[T, PT]) Enqueue(ctx context.Context, taskType string, payload any) (PT, error) {
-	return q.EnqueueWithTotal(ctx, taskType, payload, 0)
+//
+// ownerUID 是**必填位置参数而不是 Task 上的一个字段**: 归属决定谁能看见这条任务, 让它在
+// 每个调用点都显式出现, 才有可能在 code review 时被看见。传 "" 就是明确宣布"这是没有
+// 发起人的系统任务, 只有 view_all 的人能看见"。
+func (q *Queue[T, PT]) Enqueue(ctx context.Context, taskType string, payload any, ownerUID string) (PT, error) {
+	return q.EnqueueWithTotal(ctx, taskType, payload, 0, ownerUID)
 }
 
 // EnqueueWithTotal 入队一条已知总量的任务, 前端据此画百分比。
 //
 // Summary 显式写成 {} 而不是留 nil: 该列 NOT NULL, 而 GORM 对零值会写 NULL 覆盖掉
 // 数据库默认值 —— 那样每次插入都要靠列默认值兜底, 一旦有人改了默认值就会插入失败。
-func (q *Queue[T, PT]) EnqueueWithTotal(ctx context.Context, taskType string, payload any, total int) (PT, error) {
+func (q *Queue[T, PT]) EnqueueWithTotal(ctx context.Context, taskType string, payload any, total int, ownerUID string) (PT, error) {
 	rec := q.newRecord()
 	t := rec.BaseTask()
 	t.ID = uuid.New()
 	t.Type = taskType
 	t.Status = StatusPending
 	t.Payload = JSONFrom(payload)
+	t.OwnerUID = ownerUID
 	t.TotalCount = total
 	t.Summary = JSONFrom(map[string]any{})
 	t.AvailableAt = time.Now()
@@ -332,12 +337,21 @@ func (q *Queue[T, PT]) StartStaleSweeper(ctx context.Context, every, staleAfter 
 	}()
 }
 
-// load 按 id 读一条任务。任务不存在一律返回 gorm.ErrRecordNotFound —— 即便调用方的
-// gorm.Config 打开了 IgnoreRecordNotFoundError: 那种配置下 First 对空结果返回 nil
-// error 加一个零值结构体, 会一路装成"读到了", 于是 404 变成 200。
-func (q *Queue[T, PT]) load(ctx context.Context, id uuid.UUID) (PT, error) {
+// load 按 id 读一条**该归属可见的**任务。任务不存在一律返回 gorm.ErrRecordNotFound ——
+// 即便调用方的 gorm.Config 打开了 IgnoreRecordNotFoundError: 那种配置下 First 对空结果
+// 返回 nil error 加一个零值结构体, 会一路装成"读到了", 于是 404 变成 200。
+//
+// 归属不符与不存在**返回同一个错误**: 调用方一律映射成 404, 于是"这条存在但不是你的"
+// 不会通过状态码泄露出去。
+//
+// own 无效 (空 UID 且非 view_all) 返回 ErrOwnerRequired, 而不是退化成对 owner_uid 为空的匹配
+// 去匹配系统任务 —— 见 ErrOwnerRequired 的说明。
+func (q *Queue[T, PT]) load(ctx context.Context, id uuid.UUID, own OwnerScope) (PT, error) {
 	rec := q.newRecord()
-	if err := q.db.WithContext(ctx).First(rec, "id = ?", id).Error; err != nil {
+	if !own.Valid() {
+		return rec, ErrOwnerRequired
+	}
+	if err := own.apply(q.db.WithContext(ctx)).First(rec, "id = ?", id).Error; err != nil {
 		return rec, err
 	}
 	if t := rec.BaseTask(); t == nil || t.ID == uuid.Nil {
@@ -356,9 +370,9 @@ var ErrTaskRunning = errors.New("jobx: task is already running")
 // 长任务需要在任务里检查 ctx 或一个取消标记, 那是 handler 自己的事。
 //
 // 终态任务返回 nil (幂等): "让这条任务别再跑了" 这个诉求在任务已经结束时本就成立。
-// 任务不存在返回 gorm.ErrRecordNotFound, 由调用方映射成 404。
-func (q *Queue[T, PT]) Cancel(ctx context.Context, id uuid.UUID) error {
-	rec, err := q.load(ctx, id)
+// 任务不存在 (或不属于 own) 返回 gorm.ErrRecordNotFound, 由调用方映射成 404。
+func (q *Queue[T, PT]) Cancel(ctx context.Context, id uuid.UUID, own OwnerScope) error {
+	rec, err := q.load(ctx, id, own)
 	if err != nil {
 		return err
 	}
@@ -368,13 +382,17 @@ func (q *Queue[T, PT]) Cancel(ctx context.Context, id uuid.UUID) error {
 	now := time.Now()
 	// 条件更新兜住"读取与更新之间被 worker 认领了"的窗口: 影响 0 行说明状态已经变了,
 	// 再读一次给出准确答案 (running 就报 ErrTaskRunning) 而不是假装取消成功。
+	//
+	// 这里**刻意不再带一次 owner_uid**: 归属上面已经查过, 而 owner_uid 是不可变的,
+	// 窗口里不可能换主人。带上反而会让 RowsAffected==0 有两种含义 (被认领 / 不是你的),
+	// 下面那句"再读一次"就会把"不是你的"读成取消成功。
 	res := q.Model(ctx).Where("id = ? AND status = ?", id, StatusPending).
 		Updates(map[string]any{"status": StatusCancelled, "finished_at": now, "updated_at": now})
 	if res.Error != nil {
 		return res.Error
 	}
 	if res.RowsAffected == 0 {
-		cur, err := q.load(ctx, id)
+		cur, err := q.load(ctx, id, own)
 		if err != nil {
 			return err
 		}

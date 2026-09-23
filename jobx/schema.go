@@ -12,6 +12,10 @@ import (
 // 让新服务不必再各自发明一份 (workorder 的 work_order_ai_analysis 就是各自发明的
 // 结果: id 用 BIGSERIAL、状态叫 succeeded、没有任何进度列, 于是它的队列与导出的
 // 队列无法共用一套查询与前端)。
+//
+// owner_uid 用 NOT NULL DEFAULT 空串而不是可空: Go 侧是 string, NULL 扫进 string
+// 会报错; 而 PG 11+ 加一个带默认值的 NOT NULL 列不重写表。空串的语义是"无发起人"
+// (系统任务), 与"有主但主人是空"不可能混淆。
 const schemaTemplate = `
 CREATE TABLE IF NOT EXISTS %[1]s (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -19,6 +23,7 @@ CREATE TABLE IF NOT EXISTS %[1]s (
     status        VARCHAR(32) NOT NULL DEFAULT 'pending',
     payload       JSONB,
     error         TEXT,
+    owner_uid     VARCHAR(64) NOT NULL DEFAULT '',
     attempts      INTEGER NOT NULL DEFAULT 0,
     total_count   INTEGER NOT NULL DEFAULT 0,
     done_count    INTEGER NOT NULL DEFAULT 0,
@@ -34,6 +39,7 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 CREATE INDEX IF NOT EXISTS ix_%[1]s_type ON %[1]s(type);
 CREATE INDEX IF NOT EXISTS ix_%[1]s_status ON %[1]s(status);
 CREATE INDEX IF NOT EXISTS ix_%[1]s_available_at ON %[1]s(available_at);
+CREATE INDEX IF NOT EXISTS ix_%[1]s_owner_created_at ON %[1]s(owner_uid, created_at DESC);
 `
 
 // tableNameRe 限定表名只能是普通小写标识符。
