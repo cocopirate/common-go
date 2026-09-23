@@ -54,6 +54,9 @@ func ArtifactOf(t *Task) (Artifact, bool) {
 // 所以调用顺序是"先 Flush 完再 SetArtifact" —— 反过来描述符会被冲掉。
 //
 // 先读回再合并而不是直接覆盖, 是为了留住同一个 worker 写下的其它键 (失败/跳过原因)。
+//
+// 任务被取消后返回 ErrTaskNotRunning: 产物指针写不进去, 于是留存清理看不见这个对象 ——
+// 调用方必须**主动把已经上传的对象删掉**, 否则桶里会留下一个永远不会被回收的孤儿。
 func (q *Queue[T, PT]) SetArtifact(ctx context.Context, id uuid.UUID, a Artifact) error {
 	encoded, err := json.Marshal(a)
 	if err != nil {
@@ -61,7 +64,7 @@ func (q *Queue[T, PT]) SetArtifact(ctx context.Context, id uuid.UUID, a Artifact
 	}
 	return q.mergeSummary(ctx, id, func(summary map[string]json.RawMessage) {
 		summary[ArtifactKey] = encoded
-	})
+	}, true)
 }
 
 // ClearArtifact 删掉描述符 —— 它指向的文件已经被留存清理删掉了, 前端必须停止提供一个
@@ -69,14 +72,19 @@ func (q *Queue[T, PT]) SetArtifact(ctx context.Context, id uuid.UUID, a Artifact
 //
 // 删键而不是置 null: ArtifactOf 对"键不存在"报无产物, 而 null 会走进反序列化再特殊
 // 处理一遍。合并纪律与 SetArtifact 一致。
+//
+// **刻意不受写守卫约束** (唯一的例外, 见 INV-1): 留存清理是在**终态行**上摘指针的
+// (清理的判据是任务已完成且过了保留期), 冻结它等于让整个清理作业失效 —— 文件被删了,
+// 而任务行还挂着一个只会 404 的下载按钮。
 func (q *Queue[T, PT]) ClearArtifact(ctx context.Context, id uuid.UUID) error {
 	return q.mergeSummary(ctx, id, func(summary map[string]json.RawMessage) {
 		delete(summary, ArtifactKey)
-	})
+	}, false)
 }
 
 // mergeSummary 读改写 summary, mutate 就地改。任务不存在返回 gorm.ErrRecordNotFound。
-func (q *Queue[T, PT]) mergeSummary(ctx context.Context, id uuid.UUID, mutate func(map[string]json.RawMessage)) error {
+// onlyRunning 决定这次写要不要过 INV-1 的守卫 (只有 SetArtifact 要)。
+func (q *Queue[T, PT]) mergeSummary(ctx context.Context, id uuid.UUID, mutate func(map[string]json.RawMessage), onlyRunning bool) error {
 	rec := q.newRecord()
 	// id 与 summary 一起选: 只选 summary 时主键不会被填充, 下面的"行不存在"判据会把
 	// 正常读到的行当成缺失。
@@ -94,6 +102,9 @@ func (q *Queue[T, PT]) mergeSummary(ctx context.Context, id uuid.UUID, mutate fu
 		_ = json.Unmarshal(rec.BaseTask().Summary, &summary)
 	}
 	mutate(summary)
+	if onlyRunning {
+		return q.applyRunning(ctx, id, map[string]any{"summary": JSONFrom(summary)}, gorm.ErrRecordNotFound)
+	}
 	return q.Model(ctx).Where("id = ?", id).
 		Updates(map[string]any{
 			"summary":    JSONFrom(summary),

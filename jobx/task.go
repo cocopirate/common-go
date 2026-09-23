@@ -31,8 +31,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// 任务状态。pending/running/done/failed 之外多一个 cancelled: 取消是**协作式**的,
-// 只对还没被认领的任务生效 (见 Queue.Cancel)。
+// 任务状态。pending/running/done/failed 之外多一个 cancelled。
+//
+// cancelled 是**终态**, 由取消者直接写入 (见 Queue.Cancel): 正在跑的 handler 靠 watcher
+// 取消 ctx 停下, 它之后所有记账都被写守卫拒绝 (见 Queue 的 INV-1/INV-2)。所以取消不需要
+// "已请求取消"这类中间状态, 也不会有任务卡在那个状态里没人收尾。
 const (
 	StatusPending   = "pending"
 	StatusRunning   = "running"
@@ -77,6 +80,15 @@ type Task struct {
 	// 它决定谁能看见/下载这条任务 (见 OwnerScope), 所以**写入路径必须显式给值** ——
 	// Enqueue 把它做成必填位置参数就是为了让每个调用点表态, 而不是默默留空。
 	OwnerUID string `gorm:"column:owner_uid;size:64;index" json:"owner_uid,omitempty"`
+	// DedupeKey 是"同一份请求"的指纹 (调用方自己算, 见 WithDedupe), 空串表示这条任务
+	// **不参与去重**。它与 type/owner_uid 一起被一条部分唯一索引守着:
+	//
+	//	(type, owner_uid, dedupe_key) WHERE dedupe_key <> '' AND status IN ('pending','running')
+	//
+	// 于是"同一个人对同一份筛选连点两次导出"只会得到一条任务、一份产物, 而两个人导出
+	// 同一段时间互不影响 (owner 在索引列里, 不是靠调用方把它编进 key 的约定)。终态行不
+	// 在索引里 —— 跑完/取消之后同一个 key 可以重新发起。
+	DedupeKey string `gorm:"column:dedupe_key;size:128" json:"dedupe_key,omitempty"`
 	// Attempts 每次认领 +1, 包含当前这次。重试判据是 attempts < MaxAttempts。
 	Attempts int `gorm:"not null;default:0" json:"attempts"`
 	// 进度四件套 + Summary: 由 Reporter 或 handler 直接写。TotalCount 为 0 时前端

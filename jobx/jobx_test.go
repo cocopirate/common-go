@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,9 @@ func (discardWriter) Printf(string, ...any) {}
 
 // newTestDB 手写 DDL 而不是 AutoMigrate: Task 带 PG 专有默认值 (gen_random_uuid()、
 // now()), sqlite 上跑不过。
+//
+// 表结构与 SchemaSQL 逐列对齐 (含那条部分唯一索引) —— 去重的正确性完全落在索引谓词上,
+// 测试用的表少了它, 那批用例就只是在测一个普通索引, 什么都证明不了。
 func newTestDB(t *testing.T, tables ...string) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
@@ -43,6 +47,31 @@ func newTestDB(t *testing.T, tables ...string) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	createTestTables(t, db, tables)
+	return db
+}
+
+// newFileTestDB 把库落在临时文件里而不是 :memory:。
+//
+// 需要它的只有**并发**用例: database/sql 是一个连接池, 而 ":memory:" 的每一条新连接都是
+// **另一个空库** —— 测试协程从池里拿到第二条连接时, 看到的是一张不存在的表 (或一片空
+// 数据), 于是竞态用例会在毫无竞争的情况下"通过"。文件库 + WAL + busy_timeout 让多个连接
+// 真的读到同一份数据, 且写冲突会重试而不是立刻 database is locked。
+func newFileTestDB(t *testing.T, tables ...string) *gorm.DB {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "jobx.db")
+	db, err := gorm.Open(sqlite.Open(path+"?_journal_mode=WAL&_busy_timeout=5000"), &gorm.Config{
+		Logger: logger.New(discardWriter{}, logger.Config{IgnoreRecordNotFoundError: true}),
+	})
+	if err != nil {
+		t.Fatalf("open sqlite file: %v", err)
+	}
+	createTestTables(t, db, tables)
+	return db
+}
+
+func createTestTables(t *testing.T, db *gorm.DB, tables []string) {
+	t.Helper()
 	for _, table := range tables {
 		if err := db.Exec(`CREATE TABLE ` + table + ` (
 			id            TEXT PRIMARY KEY,
@@ -51,6 +80,7 @@ func newTestDB(t *testing.T, tables ...string) *gorm.DB {
 			payload       TEXT,
 			error         TEXT,
 			owner_uid     TEXT,
+			dedupe_key    TEXT DEFAULT '',
 			attempts      INTEGER DEFAULT 0,
 			total_count   INTEGER DEFAULT 0,
 			done_count    INTEGER DEFAULT 0,
@@ -65,8 +95,21 @@ func newTestDB(t *testing.T, tables ...string) *gorm.DB {
 		)`).Error; err != nil {
 			t.Fatalf("create %s: %v", table, err)
 		}
+		if err := db.Exec(`CREATE UNIQUE INDEX uq_` + table + `_dedupe_active ON ` + table +
+			`(type, owner_uid, dedupe_key) WHERE dedupe_key <> '' AND status IN ('pending', 'running')`).Error; err != nil {
+			t.Fatalf("create dedupe index on %s: %v", table, err)
+		}
 	}
-	return db
+}
+
+// newFileQueue 见 newFileTestDB。CancelPollInterval 调小, 让"取消后多久停下"的断言
+// 不必等默认的 2s。
+func newFileQueue(t *testing.T) (*Queue[leadTestTask, *leadTestTask], *gorm.DB) {
+	t.Helper()
+	db := newFileTestDB(t, "lead_task")
+	q := New[leadTestTask, *leadTestTask](db, nil)
+	q.CancelPollInterval = 30 * time.Millisecond
+	return q, db
 }
 
 func newQueue(t *testing.T) (*Queue[leadTestTask, *leadTestTask], *gorm.DB) {
@@ -192,6 +235,8 @@ func TestReporterResetAndFlush(t *testing.T) {
 	q, db := newQueue(t)
 	ctx := context.Background()
 	rec := mustEnqueue(t, q, "sync", nil, 10)
+	// 记账只在 running 行上发生 (worker 必须先认领; 写守卫见 INV-1)。
+	claimForTest(t, q, rec.ID)
 
 	rep := NewReporter(q, rec.ID, 10)
 	if err := rep.Reset(ctx); err != nil {
@@ -230,6 +275,7 @@ func TestReporterResetOnRetryIsNotCumulative(t *testing.T) {
 	q, db := newQueue(t)
 	ctx := context.Background()
 	rec := mustEnqueue(t, q, "sync", nil, 10)
+	claimForTest(t, q, rec.ID)
 
 	rep := NewReporter(q, rec.ID, 10)
 	if err := rep.Reset(ctx); err != nil {
@@ -268,6 +314,7 @@ func TestSetProgressAndTotalLeaveSummaryAlone(t *testing.T) {
 	q, db := newQueue(t)
 	ctx := context.Background()
 	rec := mustEnqueue(t, q, "export", nil, 0)
+	claimForTest(t, q, rec.ID)
 
 	if err := q.SetArtifact(ctx, rec.ID, Artifact{MediaID: "m1", Filename: "a.csv", Rows: 3}); err != nil {
 		t.Fatalf("set artifact: %v", err)
@@ -292,6 +339,7 @@ func TestArtifactMergesAndClears(t *testing.T) {
 	q, db := newQueue(t)
 	ctx := context.Background()
 	rec := mustEnqueue(t, q, "export", nil, 3)
+	claimForTest(t, q, rec.ID)
 
 	// Reporter 先写失败原因分组, SetArtifact 必须与它共存。
 	rep := NewReporter(q, rec.ID, 3)
@@ -502,16 +550,209 @@ func TestCancelPending(t *testing.T) {
 	}
 }
 
-func TestCancelRunningIsRefused(t *testing.T) {
+// TestCancelRunningWritesTheTerminalState 取代了从前的 TestCancelRunningIsRefused。
+//
+// 那次翻转是**刻意的**: 旧实现把 running 的取消拒掉 (ErrTaskRunning → 409), 因为队列
+// 当时没有任何办法打断一个已经在跑的 handler —— 假装取消成功而后台还在写文件, 比拒绝更糟。
+// 现在队列有了两样东西: watcher 取消 handler 的 ctx (中止在途 SQL/HTTP), 以及拒绝一切
+// 迟到写入的写守卫 (INV-1)。于是"拒绝取消"这条路径不再需要, 取消对 running 同样生效。
+func TestCancelRunningWritesTheTerminalState(t *testing.T) {
 	q, db := newQueue(t)
 	rec := mustEnqueue(t, q, "export", nil, 0)
 	claimForTest(t, q, rec.ID)
 
-	if err := q.Cancel(context.Background(), rec.ID, OwnerScope{ViewAll: true}); !errors.Is(err, ErrTaskRunning) {
-		t.Fatalf("cancel running = %v, want ErrTaskRunning", err)
+	if err := q.Cancel(context.Background(), rec.ID, OwnerScope{ViewAll: true}); err != nil {
+		t.Fatalf("cancel running = %v, want nil", err)
 	}
-	if row := reload(t, db, rec.ID); row.Status != StatusRunning {
-		t.Fatalf("status = %s, want running (unchanged)", row.Status)
+	row := reload(t, db, rec.ID)
+	if row.Status != StatusCancelled {
+		t.Fatalf("status = %s, want cancelled", row.Status)
+	}
+	if row.FinishedAt == nil {
+		t.Fatalf("finished_at must be set by the canceller")
+	}
+}
+
+// TestCancelRunningStopsTheHandler: 取消必须真的让 handler 停下来 (≤ CancelPollInterval),
+// 而不是只改一行状态。
+func TestCancelRunningStopsTheHandler(t *testing.T) {
+	q, db := newFileQueue(t)
+	ctx := context.Background()
+	rec := mustEnqueue(t, q, "export", nil, 0)
+
+	started := make(chan struct{})
+	q.Register("export", func(hctx context.Context, task leadTestTask) error {
+		close(started)
+		for i := 0; i < 1000; i++ {
+			select {
+			case <-hctx.Done():
+				return hctx.Err()
+			case <-time.After(5 * time.Millisecond):
+			}
+			// 每批记账 —— 这就是导出 worker 的形状, 取消会顺着这个 error 上来。
+			if err := q.SetProgress(hctx, task.ID, i+1); err != nil {
+				return err
+			}
+		}
+		return errors.New("handler ran to completion despite the cancel")
+	})
+
+	claimed := claimForTest(t, q, rec.ID)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		q.run(ctx, claimed, 0)
+	}()
+	<-started
+
+	if err := q.Cancel(ctx, rec.ID, OwnerScope{ViewAll: true}); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("handler kept running well past CancelPollInterval after cancel")
+	}
+
+	row := reload(t, db, rec.ID)
+	if row.Status != StatusCancelled {
+		t.Fatalf("status = %s, want cancelled (the handler must not overwrite it)", row.Status)
+	}
+	// INV-2: handler 的返回没有变成终态作者 —— 取消之后没有 done/failed 被写进去, 也没有
+	// 被重排回 pending (那会让它被下一个 worker 认领重跑)。
+	if row.Error != nil {
+		t.Fatalf("cancel must not record the handler's error, got %q", *row.Error)
+	}
+	if row.Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1 (no requeue)", row.Attempts)
+	}
+}
+
+// TestReclaimedTaskStopsTheOriginalWorker: 行被回收后又被别的副本认领时, 原来的执行必须
+// 停下且**什么都不写** —— 否则它会把新主人正在跑的任务改回 pending, 同一份活跑两遍。
+func TestReclaimedTaskStopsTheOriginalWorker(t *testing.T) {
+	q, db := newFileQueue(t)
+	ctx := context.Background()
+	rec := mustEnqueue(t, q, "export", nil, 0)
+
+	started := make(chan struct{})
+	q.Register("export", func(hctx context.Context, task leadTestTask) error {
+		close(started)
+		select {
+		case <-hctx.Done():
+			return hctx.Err()
+		case <-time.After(5 * time.Second):
+			return errors.New("never cancelled")
+		}
+	})
+
+	claimed := claimForTest(t, q, rec.ID)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		q.run(ctx, claimed, 0)
+	}()
+	<-started
+
+	// 模拟"回收器把它改回 pending, 另一个副本又认领了它": attempts 不再是认领时那个值。
+	if err := q.Model(ctx).Where("id = ?", rec.ID).Updates(map[string]any{
+		"status": StatusRunning, "attempts": gorm.Expr("attempts + 1"),
+	}).Error; err != nil {
+		t.Fatalf("simulate reclaim: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("the original worker kept running after the row was reclaimed")
+	}
+	row := reload(t, db, rec.ID)
+	if row.Status != StatusRunning {
+		t.Fatalf("status = %s, want running (the new owner is in charge, the old one must not touch it)", row.Status)
+	}
+	if row.Error != nil {
+		t.Fatalf("the stale worker wrote an error: %q", *row.Error)
+	}
+}
+
+// TestWriteGuardFreezesAfterCancel: 取消之后 worker 的一切记账都被拒绝 —— 前端不会再看到
+// "已取消但进度还在涨" 的任务。唯一的例外是 ClearArtifact (留存清理在终态行上摘指针)。
+func TestWriteGuardFreezesAfterCancel(t *testing.T) {
+	q, db := newQueue(t)
+	ctx := context.Background()
+	rec := mustEnqueue(t, q, "export", nil, 3)
+	claimForTest(t, q, rec.ID)
+
+	// 先正常写一次: 产物描述符必须在冻结后仍然可读 (取消不删已经生成的文件)。
+	if err := q.SetArtifact(ctx, rec.ID, Artifact{MediaID: "m1", Filename: "a.csv", Rows: 3}); err != nil {
+		t.Fatalf("set artifact: %v", err)
+	}
+	if err := q.Cancel(ctx, rec.ID, OwnerScope{ViewAll: true}); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	rep := NewReporter(q, rec.ID, 3)
+	cases := map[string]func() error{
+		"SetProgress": func() error { return q.SetProgress(ctx, rec.ID, 99) },
+		"SetTotal":    func() error { return q.SetTotal(ctx, rec.ID, 99) },
+		"SetArtifact": func() error { return q.SetArtifact(ctx, rec.ID, Artifact{MediaID: "m2"}) },
+		"Reporter.Flush": func() error {
+			rep.AddDone(99)
+			return rep.Flush(ctx)
+		},
+		"Reporter.Reset": func() error { return rep.Reset(ctx) },
+	}
+	for name, fn := range cases {
+		if err := fn(); !errors.Is(err, ErrTaskNotRunning) {
+			t.Fatalf("%s after cancel = %v, want ErrTaskNotRunning", name, err)
+		}
+	}
+
+	// 计数停在取消那一刻 (入队时 total=3, 冻结的 SetTotal(99)/SetProgress(99) 都没生效)。
+	row := reload(t, db, rec.ID)
+	if row.DoneCount != 0 || row.TotalCount != 3 {
+		t.Fatalf("counts = done %d total %d, want 0/3 (the frozen writes changed nothing)",
+			row.DoneCount, row.TotalCount)
+	}
+	art, ok := ArtifactOf(&row.Task)
+	if !ok || art.MediaID != "m1" {
+		t.Fatalf("artifact = %+v (ok=%v), want the pre-cancel descriptor untouched", art, ok)
+	}
+
+	// 唯一不受守卫约束的写: 留存清理要在终态行上摘掉指针。
+	if err := q.ClearArtifact(ctx, rec.ID); err != nil {
+		t.Fatalf("ClearArtifact after cancel = %v, want nil (cleanup runs on terminal rows)", err)
+	}
+	if row := reload(t, db, rec.ID); func() bool { _, ok := ArtifactOf(&row.Task); return ok }() {
+		t.Fatalf("ClearArtifact must still take effect, summary = %s", row.Summary)
+	}
+}
+
+// TestResetStaleRunningLeavesCancelledAlone 钉住"取消不需要中间态"所依赖的那条结构性质:
+// cancelled 是终态, 而回收器的谓词是 running, 两者永不相交 —— 所以回收器不可能把用户
+// 明确不要的任务复活重跑。
+func TestResetStaleRunningLeavesCancelledAlone(t *testing.T) {
+	q, db := newQueue(t)
+	ctx := context.Background()
+	rec := mustEnqueue(t, q, "export", nil, 0)
+	// 让它的 started_at 老到任何 staleAfter 都算过期。
+	if err := q.Model(ctx).Where("id = ?", rec.ID).
+		Updates(map[string]any{"status": StatusRunning, "started_at": time.Now().Add(-2 * time.Hour)}).Error; err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := q.Cancel(ctx, rec.ID, OwnerScope{ViewAll: true}); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	n, err := q.ResetStaleRunning(ctx, time.Minute)
+	if err != nil {
+		t.Fatalf("reset stale: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("requeued %d rows, want 0 (a cancelled task is terminal)", n)
+	}
+	if row := reload(t, db, rec.ID); row.Status != StatusCancelled {
+		t.Fatalf("status = %s, want cancelled", row.Status)
 	}
 }
 
@@ -618,6 +859,27 @@ func TestSchemaSQL(t *testing.T) {
 		if _, err := SchemaSQL(bad); err == nil {
 			t.Fatalf("SchemaSQL(%q) must be rejected: the name is interpolated into DDL", bad)
 		}
+	}
+}
+
+// TestSchemaSQLDedupeIndexIsExact 钉死整条去重索引的定义 (列顺序 + 两段谓词)。
+//
+// 这是全包最容易"写错还看不出来"的一行: 谓词少一段不会报错, 只会让去重静默失效
+// (漏 dedupe_key <> ” 队列当场写死; 漏 status 过滤则同一个 key 跑完就再也提交不了;
+// 列顺序变了索引依然建得起来, 但 owner 参与去重的方式就变了)。索引定义没有别的守卫,
+// 所以这里逐字比对。
+func TestSchemaSQLDedupeIndexIsExact(t *testing.T) {
+	sql, err := SchemaSQL("job_task")
+	if err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	want := `CREATE UNIQUE INDEX IF NOT EXISTS uq_job_task_dedupe_active ON job_task(type, owner_uid, dedupe_key) WHERE dedupe_key <> '' AND status IN ('pending', 'running');`
+	if !strings.Contains(sql, want) {
+		t.Fatalf("dedupe index is not exactly as specified:\nwant: %s\ngot:\n%s", want, sql)
+	}
+	if !strings.Contains(sql, "dedupe_key    VARCHAR(128) NOT NULL DEFAULT ''") {
+		t.Fatalf("dedupe_key column must be NOT NULL DEFAULT '' (a nullable column would push\n"+
+			"the emptiness check into every call site, and NULL never satisfies `<> ''`):\n%s", sql)
 	}
 }
 

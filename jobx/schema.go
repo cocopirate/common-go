@@ -15,7 +15,18 @@ import (
 //
 // owner_uid 用 NOT NULL DEFAULT 空串而不是可空: Go 侧是 string, NULL 扫进 string
 // 会报错; 而 PG 11+ 加一个带默认值的 NOT NULL 列不重写表。空串的语义是"无发起人"
-// (系统任务), 与"有主但主人是空"不可能混淆。
+// (系统任务), 与"有主但主人是空"不可能混淆。dedupe_key 同款 (空串 = 不参与去重)。
+//
+// 最后那条**部分唯一索引**是去重的全部实现 (见 Task.DedupeKey), 谓词的四段各挡一件事,
+// 少一段都是线上事故:
+//
+//	dedupe_key <> ''   无 key 的任务不互相冲突 (少了它, 第二条无 key 的任务就插不进来,
+//	                   队列当场写死)
+//	status IN (...)    终态行退出索引 —— 少了它, 同一个 key 全局只能有一条, 跑完就再也
+//	                   导不出来
+//	UNIQUE             靠数据库而不是"先查后插"来去重 (并发提交只有一个能赢)
+//	owner_uid 进列     两个人导出同一段时间不该互相顶掉 (做成结构, 而不是"请调用方把
+//	                   owner 编进 key"的约定)
 const schemaTemplate = `
 CREATE TABLE IF NOT EXISTS %[1]s (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -24,6 +35,7 @@ CREATE TABLE IF NOT EXISTS %[1]s (
     payload       JSONB,
     error         TEXT,
     owner_uid     VARCHAR(64) NOT NULL DEFAULT '',
+    dedupe_key    VARCHAR(128) NOT NULL DEFAULT '',
     attempts      INTEGER NOT NULL DEFAULT 0,
     total_count   INTEGER NOT NULL DEFAULT 0,
     done_count    INTEGER NOT NULL DEFAULT 0,
@@ -40,6 +52,7 @@ CREATE INDEX IF NOT EXISTS ix_%[1]s_type ON %[1]s(type);
 CREATE INDEX IF NOT EXISTS ix_%[1]s_status ON %[1]s(status);
 CREATE INDEX IF NOT EXISTS ix_%[1]s_available_at ON %[1]s(available_at);
 CREATE INDEX IF NOT EXISTS ix_%[1]s_owner_created_at ON %[1]s(owner_uid, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_%[1]s_dedupe_active ON %[1]s(type, owner_uid, dedupe_key) WHERE dedupe_key <> '' AND status IN ('pending', 'running');
 `
 
 // tableNameRe 限定表名只能是普通小写标识符。

@@ -103,7 +103,10 @@ func enqueueOwned(t *testing.T, q *Queue[leadTestTask, *leadTestTask], owner str
 	}
 	if withArtifact {
 		art := Artifact{MediaID: "media-" + owner, Filename: owner + ".csv", Rows: 3}
-		if err := q.SetArtifact(context.Background(), rec.ID, art); err != nil {
+		// 直接写库而不是走 SetArtifact: 这个 helper 是**造数据**, 而写守卫只允许 worker 写
+		// running 行 —— 为了挂一个描述符先去认领, 会平白改掉这些用例要断言的行状态。
+		if err := q.Model(context.Background()).Where("id = ?", rec.ID).
+			Updates(map[string]any{"summary": JSONFrom(map[string]any{ArtifactKey: art})}).Error; err != nil {
 			t.Fatalf("set artifact: %v", err)
 		}
 	}

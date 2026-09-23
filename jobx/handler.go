@@ -216,11 +216,16 @@ func (h *APIHandler[T, PT]) Artifact(c *gin.Context) {
 	})
 }
 
-// Cancel 处理 POST <tasks>/:id/cancel —— 取消一条还没被认领的任务。
+// Cancel 处理 POST <tasks>/:id/cancel —— 取消一条任务, pending 与 running 都行。
 //
-// running 的任务返回 409: 取消是协作式的, 队列改得了状态却打断不了正在跑的 handler,
-// 假装成功而后台还在写文件比明确拒绝更糟。终态任务返回 200 (幂等) —— "让它别再跑了"
-// 在任务已经结束时本就成立。
+// 两种情形都返回同样的 200 {id, status: "cancelled"}: 取消者直接写终态, 正在跑的 handler
+// 在 ≤ CancelPollInterval 内被 watcher 取消 ctx 停下, 它之后的记账会被写守卫拒绝 (见
+// Queue.Cancel)。前端因此不需要为 running 单独分一个分支, 也不再需要处理 409。
+//
+// 终态任务同样返回 200 (幂等) —— "让它别再跑了" 在任务已经结束时本就成立。
+//
+// 注意 200 的含义是"这条任务不会再跑了", **不是**"它从没跑过": 一个刚好在取消落地前完成
+// 的任务会保持 done, 而它的产物仍然可以下载 (取消不删已经生成的文件)。
 func (h *APIHandler[T, PT]) Cancel(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -234,9 +239,6 @@ func (h *APIHandler[T, PT]) Cancel(c *gin.Context) {
 	switch err := h.q.Cancel(c.Request.Context(), id, own); {
 	case err == nil:
 		response.OK(c, gin.H{"id": id, "status": StatusCancelled})
-	case errors.Is(err, ErrTaskRunning):
-		response.Fail(c, http.StatusConflict, response.ConflictCode,
-			"task is already running and cannot be cancelled")
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		response.NotFound(c, "task not found")
 	case errors.Is(err, ErrOwnerRequired):
