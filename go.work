@@ -22,7 +22,7 @@ replace github.com/cocopirate/common-go/dbx v0.1.1 => ./dbx
 
 replace github.com/cocopirate/common-go/httpx v0.1.10 => ./httpx
 
-replace github.com/cocopirate/common-go/jobx v0.1.0 => ./jobx
+replace github.com/cocopirate/common-go/jobx v0.2.0 => ./jobx
 
 replace github.com/cocopirate/common-go/logx v0.1.2 => ./logx
 
