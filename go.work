@@ -4,6 +4,7 @@ use (
 	./authx
 	./bootstrap
 	./dbx
+	./exportx
 	./httpx
 	./logx
 	./ossx

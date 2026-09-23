@@ -11,6 +11,7 @@
 | `authx` | JWT claims、身份透传 header、角色和权限辅助方法。 |
 | `bootstrap` | 服务启动、关闭和通用生命周期封装。 |
 | `dbx` | 数据库连接、GORM 配置和迁移辅助能力。 |
+| `exportx` | 导出文件的通用机械部分：CSV 骨架（UTF-8 BOM、行数上限与截断提示）、固定 +08:00 时间渲染、日期文件名、Excel 文本包装。 |
 | `httpx` | HTTP server、Gin middleware、统一响应和公开路由辅助能力。 |
 | `logx` | Zap 日志初始化和日志字段辅助方法。 |
 | `ossx` | 阿里云 OSS 签名 URL 与公共域名 URL 辅助方法。 |
@@ -23,6 +24,7 @@
 authx/       # 认证与身份辅助包
 bootstrap/   # 服务生命周期辅助包
 dbx/         # 数据库与迁移辅助包
+exportx/     # 导出文件机械部分辅助包
 httpx/       # HTTP 服务、响应与中间件辅助包
 logx/        # 日志辅助包
 ossx/        # 阿里云 OSS 辅助包
