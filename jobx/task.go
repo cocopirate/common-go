@@ -66,8 +66,9 @@ const DefaultTable = "job_task"
 // 产物描述符与失败原因分组)。加业务列就要动表结构, 而 payload/summary 是 JSONB,
 // 加字段不用迁移 —— 这是这个模型能同时装下导出、同步、检测等多类任务的原因。
 //
-// OwnerUID 是唯一为"归属"开的一级列 (它本可以塞进 payload, 但那样没法建索引也没法
-// 在 SQL 里筛, 只能全表读出来在内存里过滤)。
+// 为"归属"开的一级列有两个 (OwnerUID 与 OwnerName): 它们本可以塞进 payload, 但那样
+// 既没法建索引、也没法在 SQL 里筛, 而 OwnerName 更是**根本读不出来** —— 任务列表的
+// 投影是本包的 TaskView, 它不看 payload (见 view.go)。
 type Task struct {
 	ID     uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	Type   string    `gorm:"size:64;not null;index" json:"type"`
@@ -80,6 +81,27 @@ type Task struct {
 	// 它决定谁能看见/下载这条任务 (见 OwnerScope), 所以**写入路径必须显式给值** ——
 	// Enqueue 把它做成必填位置参数就是为了让每个调用点表态, 而不是默默留空。
 	OwnerUID string `gorm:"column:owner_uid;size:64;index" json:"owner_uid,omitempty"`
+	// OwnerName 是发起人的**展示名**(姓名/昵称), 与 OwnerUID 一起构成"这条任务是谁的"。
+	// 它只为**能看见别人任务的人**(view_all 持有者)而存在: 只看得见自己任务的人, 每一行
+	// 当然都是自己的, 名字没有增量信息。
+	//
+	// 空串合法, 且是常态之一 (系统任务、老数据、解析不出来) —— 前端回落到显示 owner_uid,
+	// 所以这一列只影响好看程度, 不影响任何判定。
+	//
+	// 三条边界:
+	//
+	//   - **本包不解析它**。jobx 没有身份库, 值由入队方给 (WithOwnerName): 那正是网关身份
+	//     头与用户信息还在手上的地方。空着就是不显示名字, 而不是去猜。
+	//   - **它是入队那一刻的快照**, 不是外键。改名之后历史行仍是当时的名字 —— 与各服务
+	//     自己记的 creator_name/operator_name 同一个取舍, 对"这份导出当初是谁做的"这种
+	//     追溯场景通常正是想要的。
+	//   - 读时解析做不到: 下载中心要看的是**历史**任务, 而身份的现成来源 (auth-service 的
+	//     user_profile 缓存) 是会话级的, 过期就查不出名字; 权威的那份在另一个服务里, 一页
+	//     二十个 owner 要批量端点才问得起 —— 一个展示字段不值一条运行时依赖。
+	//
+	// 长度上限 OwnerNameMaxRunes (128, 就是这里的 size) 由 fitOwnerName 在写入时兜住:
+	// 超长按字符截断, 而不是让 PG 报 "value too long" 把这次入队整个弄失败。
+	OwnerName string `gorm:"column:owner_name;size:128" json:"owner_name,omitempty"`
 	// DedupeKey 是"同一份请求"的指纹 (调用方自己算, 见 WithDedupe), 空串表示这条任务
 	// **不参与去重**。它与 type/owner_uid 一起被一条部分唯一索引守着:
 	//

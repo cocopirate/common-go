@@ -9,13 +9,17 @@ import (
 // TaskView 是任务的 API 投影: 不含 payload (可能很大, 且是审计信息), 只有进度计数与
 // 服务端算好的百分比。
 //
-// OwnerUID 在这里是**给 view_all 的人看的**: 他们能看到所有人的任务, 需要分清哪行是
-// 谁的。只看得见自己任务的人拿到的每一行当然都是自己的, 前端不必据此分支。
+// OwnerUID / OwnerName 在这里是**给 view_all 的人看的**: 他们能看到所有人的任务, 需要
+// 分清哪行是谁的。只看得见自己任务的人拿到的每一行当然都是自己的, 前端不必据此分支。
+//
+// OwnerName 可能为空 (系统任务、老数据、入队时没给), 前端回落到 OwnerUID 显示 —— 名字
+// 只影响好看程度, 归属判定始终只认 OwnerUID。
 type TaskView struct {
 	ID              uuid.UUID  `json:"id"`
 	Type            string     `json:"type"`
 	Status          string     `json:"status"`
 	OwnerUID        string     `json:"owner_uid,omitempty"`
+	OwnerName       string     `json:"owner_name,omitempty"`
 	TotalCount      int        `json:"total_count"`
 	DoneCount       int        `json:"done_count"`
 	FailedCount     int        `json:"failed_count"`
@@ -52,6 +56,7 @@ func View(t *Task) TaskView {
 		Type:            t.Type,
 		Status:          t.Status,
 		OwnerUID:        t.OwnerUID,
+		OwnerName:       t.OwnerName,
 		TotalCount:      t.TotalCount,
 		DoneCount:       t.DoneCount,
 		FailedCount:     t.FailedCount,

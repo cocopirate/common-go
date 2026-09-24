@@ -80,6 +80,7 @@ func createTestTables(t *testing.T, db *gorm.DB, tables []string) {
 			payload       TEXT,
 			error         TEXT,
 			owner_uid     TEXT,
+			owner_name    TEXT DEFAULT '',
 			dedupe_key    TEXT DEFAULT '',
 			attempts      INTEGER DEFAULT 0,
 			total_count   INTEGER DEFAULT 0,

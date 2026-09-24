@@ -15,7 +15,8 @@ import (
 //
 // owner_uid 用 NOT NULL DEFAULT 空串而不是可空: Go 侧是 string, NULL 扫进 string
 // 会报错; 而 PG 11+ 加一个带默认值的 NOT NULL 列不重写表。空串的语义是"无发起人"
-// (系统任务), 与"有主但主人是空"不可能混淆。dedupe_key 同款 (空串 = 不参与去重)。
+// (系统任务), 与"有主但主人是空"不可能混淆。dedupe_key 同款 (空串 = 不参与去重),
+// owner_name 也是 (空串 = 没有展示名, 前端回落到显示 owner_uid)。
 //
 // 最后那条**部分唯一索引**是去重的全部实现 (见 Task.DedupeKey), 谓词的四段各挡一件事,
 // 少一段都是线上事故:
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS %[1]s (
     payload       JSONB,
     error         TEXT,
     owner_uid     VARCHAR(64) NOT NULL DEFAULT '',
+    owner_name    VARCHAR(128) NOT NULL DEFAULT '',
     dedupe_key    VARCHAR(128) NOT NULL DEFAULT '',
     attempts      INTEGER NOT NULL DEFAULT 0,
     total_count   INTEGER NOT NULL DEFAULT 0,

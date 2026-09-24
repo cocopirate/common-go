@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -124,6 +125,44 @@ type EnqueueOption func(*enqueueOptions)
 
 type enqueueOptions struct {
 	dedupeKey string
+	ownerName string
+}
+
+// WithOwnerName 给这次入队记上发起人的展示名 (见 Task.OwnerName)。
+//
+// 与 ownerUID 不同, 它是**可选的**: 归属是判定 (空的归属那条任务谁都看不见, 所以 Enqueue
+// 把它做成必填位置参数), 而名字只是给别人看的标签 —— 没有它, 列表里显示 owner_uid, 一切
+// 照常。所以它不该有"忘了传"的编译期代价, 只该有"忘了传"的显示代价。
+//
+// 传什么由调用方决定, 本包只存: 服务侧通常直接取网关注入的展示名 header (没有就留空,
+// 不要去调身份服务 —— 见 Task.OwnerName 的取舍)。
+//
+// 超过 OwnerNameMaxRunes 的会被**截断**(按字符), 见 fitOwnerName —— 名字是用户数据,
+// 它长得超出列宽不能让这次入队失败。
+func WithOwnerName(name string) EnqueueOption {
+	return func(o *enqueueOptions) { o.ownerName = name }
+}
+
+// OwnerNameMaxRunes 是展示名的存储上限, 与 Task.OwnerName 的 size:128 (即 DDL 里的
+// VARCHAR(128)) 一致。
+const OwnerNameMaxRunes = 128
+
+// fitOwnerName 把展示名按**字符**截到列宽以内。
+//
+// 为什么在写库前截: 名字是**用户数据**, 长度不受本包控制 (来源是身份服务里的姓名/账号),
+// 而 PG 对超长字符串是**报错**而不是截断 —— 一条超长的名字会让这次入队整个失败, 于是
+// "一个只影响好看程度的字段"反过来挡住了导出本身。这正是 WithOwnerName 承诺过不会发生的
+// 事, 所以在唯一的写入点上兜住。
+//
+// 按字符而不是字节: PG 的 VARCHAR(n) 数的是字符, 而按字节切会把一个汉字切成半个
+// (产生无效 UTF-8, 显示成乱码)。
+//
+// 截断是**静默**的: 展示名截断后仍然可读, 为它写日志或报错都不划算 (而且本包没有 logger)。
+func fitOwnerName(name string) string {
+	if utf8.RuneCountInString(name) <= OwnerNameMaxRunes {
+		return name
+	}
+	return string([]rune(name)[:OwnerNameMaxRunes])
 }
 
 // WithDedupe 给这次入队一个去重键 (见 Task.DedupeKey)。同一个 owner、同一个类型、同一个
@@ -190,6 +229,7 @@ func (q *Queue[T, PT]) EnqueueWithOutcome(ctx context.Context, taskType string, 
 	t.Status = StatusPending
 	t.Payload = JSONFrom(payload)
 	t.OwnerUID = ownerUID
+	t.OwnerName = fitOwnerName(o.ownerName)
 	t.DedupeKey = o.dedupeKey
 	t.TotalCount = total
 	t.Summary = JSONFrom(map[string]any{})

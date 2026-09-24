@@ -9,9 +9,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cocopirate/common-go/authx"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -137,6 +139,86 @@ func TestEmptyOwnerIsPersistedAsSuch(t *testing.T) {
 	if View(rec.BaseTask()).OwnerUID != "" {
 		t.Fatalf("unowned task must not expose an owner")
 	}
+}
+
+// TestEnqueueWithOwnerNamePersistsAndExposes 覆盖展示名这条链路的两端: 入队时给的
+// 名字落到列上, 并且**读得出来** —— 后者才是加这一列的理由 (名字若只存在 payload 里,
+// 任务列表的投影 TaskView 根本看不见它, 见 view.go)。
+func TestEnqueueWithOwnerNamePersistsAndExposes(t *testing.T) {
+	q, db := newQueue(t)
+	rec, err := q.EnqueueWithTotal(context.Background(), "complaint_export", nil, 1, "alice", WithOwnerName("张三"))
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if got := reload(t, db, rec.ID).OwnerName; got != "张三" {
+		t.Fatalf("owner_name = %q, want 张三", got)
+	}
+	// 名字与归属是两条独立的列: 加了名字不能把归属挤掉。
+	if got := reload(t, db, rec.ID).OwnerUID; got != "alice" {
+		t.Fatalf("owner_uid = %q, want alice", got)
+	}
+	if got := View(rec.BaseTask()).OwnerName; got != "张三" {
+		t.Fatalf("TaskView.owner_name = %q, want 张三", got)
+	}
+}
+
+// TestOwnerNameIsOptional — 不传就留空, 而不是报错或补一个猜出来的值: 名字只影响
+// 好看程度 (前端回落到显示 owner_uid), 归属判定始终只认 OwnerUID。无主任务同理。
+func TestOwnerNameIsOptional(t *testing.T) {
+	q, db := newQueue(t)
+
+	mine, err := q.EnqueueWithTotal(context.Background(), "complaint_export", nil, 1, "alice")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	system := mustEnqueue(t, q, "complaint_sync", nil, 0)
+
+	for _, id := range []uuid.UUID{mine.ID, system.ID} {
+		if got := reload(t, db, id).OwnerName; got != "" {
+			t.Fatalf("owner_name = %q, want empty when WithOwnerName is not passed", got)
+		}
+	}
+	// 空名字不影响归属: 有主的那条仍归 alice, 无主的那条仍是空归属。
+	got := decodeList(t, do(t, ownerRouterAs(ownerHandler(q), "alice", "admin.lead.tasks.view"), http.MethodGet, "/tasks"))
+	if got.Data.Total != 1 || got.Data.Items[0].ID != mine.ID {
+		t.Fatalf("total = %d, want only alice's own task", got.Data.Total)
+	}
+	if got.Data.Items[0].OwnerName != "" {
+		t.Fatalf("owner_name = %q, want empty", got.Data.Items[0].OwnerName)
+	}
+}
+
+// TestOwnerNameIsTruncatedToColumnWidth — 展示名是**用户数据**, 长度不受本包控制, 而
+// PG 对超出 VARCHAR(128) 的字符串是报错: 不截断的话, 一个超长的名字会让这次入队整个
+// 失败, 于是一个只影响好看程度的字段反过来挡住了导出本身。
+//
+// 按**字符**截断 (不是字节) —— 按字节切会把一个汉字切成半个, 显示成乱码。
+func TestOwnerNameIsTruncatedToColumnWidth(t *testing.T) {
+	q, db := newQueue(t)
+
+	long := strings.Repeat("张", OwnerNameMaxRunes+5) // 133 个汉字, 按字节是 399
+	rec, err := q.EnqueueWithTotal(context.Background(), "complaint_export", nil, 1, "alice", WithOwnerName(long))
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	got := reload(t, db, rec.ID).OwnerName
+	if n := utf8.RuneCountInString(got); n != OwnerNameMaxRunes {
+		t.Fatalf("owner_name 长度 = %d 字符, want %d", n, OwnerNameMaxRunes)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("owner_name 不是合法 UTF-8 (按字节截断了): %q", got)
+	}
+	if got != long[:OwnerNameMaxRunes*3] { // "张" 是 3 字节
+		t.Fatalf("owner_name 不是原名的前缀")
+	}
+}
+
+// ownerHandler 是"只装了任务端点"的 handler (Owner 按页签规则配好)。
+func ownerHandler(q *Queue[leadTestTask, *leadTestTask]) *APIHandler[leadTestTask, *leadTestTask] {
+	h := NewAPIHandler(q, &fakeSigner{})
+	h.Owner = OwnerFromHeaders(viewAllCode)
+	return h
 }
 
 // TestListShowsOnlyOwnTasks 是这次改动的核心: 同一个权限码, 不同的人看到不同的行。
