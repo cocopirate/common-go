@@ -11,6 +11,7 @@ use (
 	./ossx
 	./redisx
 	./telemetry
+	./taskbus
 	./yop
 )
 
@@ -31,5 +32,7 @@ replace github.com/cocopirate/common-go/ossx v0.1.0 => ./ossx
 replace github.com/cocopirate/common-go/redisx v0.1.0 => ./redisx
 
 replace github.com/cocopirate/common-go/telemetry v0.1.9 => ./telemetry
+
+replace github.com/cocopirate/common-go/taskbus v0.1.0 => ./taskbus
 
 replace github.com/cocopirate/common-go/yop v0.1.7 => ./yop
