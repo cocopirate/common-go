@@ -36,14 +36,21 @@ const (
 	//     全量翻页拉 legacy-bff 的长跑会把 call-check 的命令堵在队头;
 	//  2. 两类失败分开: rake 的失败风暴不会污染 call-check 的重试计数与 DLQ。
 	LeadRakeQueue = "opengo.lead.rake.tasks"
+	// DownloadQueue 只承载 download.export_artifact.cleanup 这一个任务类型, 所以不另拆
+	// (lead 拆 rake 是因为 call-check 会被长跑堵住, 这里没有并列的第二类命令)。
+	//
+	// 它清理的是**未脱敏**的导出产物 (CSV 里有姓名/手机号/地址), 而对象存储不会自己过期 ——
+	// 这条队列必须有人消费, 否则每次导出都在桶里留一份永久数据副本。
+	DownloadQueue = "opengo.download.tasks"
 	// 结果队列: 业务服务回报 → scheduler 消费, 方向与上面相反。正因为它反向,
 	// **发起 run 的业务服务也要在启动时 EnsureQueue 它**: exchange 上还没有绑定时,
 	// publisher confirm 依然 ACK, 消息会被静默丢弃 (见 Publisher.EnsureQueue)。
 	SchedulerQueue = "opengo.scheduler.tasks"
 
-	WorkorderAIAnalysisBatch = "workorder.ai_analysis.batch"
-	LeadTextCallCheck        = "lead.text_parse.call_check"
-	LeadKeziRakeOrderSync    = "lead.kezi_rake_order.sync"
+	WorkorderAIAnalysisBatch      = "workorder.ai_analysis.batch"
+	LeadTextCallCheck             = "lead.text_parse.call_check"
+	LeadKeziRakeOrderSync         = "lead.kezi_rake_order.sync"
+	DownloadExportArtifactCleanup = "download.export_artifact.cleanup"
 	// RunFinished 是唯一一条"回执"方向的消息: 其余 task type 都是 scheduler 发出的命令。
 	RunFinished = "scheduler.run.finished"
 )
@@ -79,7 +86,7 @@ func NewMessage(runID, taskID int64, taskType string, params json.RawMessage, sc
 
 // RunResult 是一次调度运行的完成结果, 既是 RunFinished 消息的 params, 也是
 // POST /internal/runs/:id/finish 的 body —— 两条通道共用这一个定义, 免得形状漂移。
-// merchant-service 与 download-service 仍走 HTTP 那条, 所以改名会同时打断它们。
+// merchant-service (申报/营收) 仍走 HTTP 那条, 所以改名会同时打断它们。
 type RunResult struct {
 	Status       string          `json:"status"` // success | failed
 	ErrorMessage *string         `json:"error_message"`
