@@ -65,6 +65,10 @@ func TestResultOmitsNilPayload(t *testing.T) {
 		{name: "nil interface", payload: nil},
 		// typed nil 指针走的是 interface 非 nil 分支, 是最容易漏的一种。
 		{name: "typed nil pointer", payload: (*struct{ A int })(nil)},
+		// 同上, 而且更常见: 一个 var m map[string]any 传进来就是这种。json.Marshal
+		// 把它写成 "null" 而不是报错, 所以只看 payload == nil 根本拦不住。
+		{name: "typed nil map", payload: (map[string]any)(nil)},
+		{name: "typed nil slice", payload: ([]string)(nil)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

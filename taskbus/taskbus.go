@@ -42,6 +42,16 @@ const (
 	// 它清理的是**未脱敏**的导出产物 (CSV 里有姓名/手机号/地址), 而对象存储不会自己过期 ——
 	// 这条队列必须有人消费, 否则每次导出都在桶里留一份永久数据副本。
 	DownloadQueue = "opengo.download.tasks"
+	// MerchantQueue 承载申报与营收两个任务类型, 不拆开:
+	//
+	//  1. 两者都是**每月一次**的重活。营收是全平台唯一去旧库订单大表聚合的地方, 申报要跨
+	//     旧库 + PG 筛完所有候选 —— 同队列串行, 旧库同一时刻只挨一次重查询;
+	//  2. 营收快照是申报报文里上月营收与额度标识的**唯一来源**, 所以营收必须跑在申报前。
+	//     同队列 FIFO 把这个数据依赖变成结构性保证, 而不是靠 crontab 的时间差。
+	//
+	// 与 LeadRakeQueue 的拆分理由 (长跑堵住并列命令) 不冲突: 那两个是并列的同类命令、其中
+	// 一个长跑会堵住另一个; 这里两者本就该一前一后, 串行是想要的语义而不是代价。
+	MerchantQueue = "opengo.merchant.tasks"
 	// 结果队列: 业务服务回报 → scheduler 消费, 方向与上面相反。正因为它反向,
 	// **发起 run 的业务服务也要在启动时 EnsureQueue 它**: exchange 上还没有绑定时,
 	// publisher confirm 依然 ACK, 消息会被静默丢弃 (见 Publisher.EnsureQueue)。
@@ -51,6 +61,8 @@ const (
 	LeadTextCallCheck             = "lead.text_parse.call_check"
 	LeadKeziRakeOrderSync         = "lead.kezi_rake_order.sync"
 	DownloadExportArtifactCleanup = "download.export_artifact.cleanup"
+	MerchantMarketDeclareSubmit   = "merchant.market_declare.submit"
+	MerchantStoreRevenueCompute   = "merchant.store_revenue.compute"
 	// RunFinished 是唯一一条"回执"方向的消息: 其余 task type 都是 scheduler 发出的命令。
 	RunFinished = "scheduler.run.finished"
 )
@@ -84,9 +96,10 @@ func NewMessage(runID, taskID int64, taskType string, params json.RawMessage, sc
 	}
 }
 
-// RunResult 是一次调度运行的完成结果, 既是 RunFinished 消息的 params, 也是
-// POST /internal/runs/:id/finish 的 body —— 两条通道共用这一个定义, 免得形状漂移。
-// merchant-service (申报/营收) 仍走 HTTP 那条, 所以改名会同时打断它们。
+// RunResult 是一次调度运行的完成结果, 是 RunFinished 消息的 params。
+//
+// 它从前还要同时充当 POST /internal/runs/:id/finish 的 body —— 那条 HTTP 回执通道随
+// merchant-service (最后一个调用方) 迁移而删除, 现在只剩 MQ 一条路。
 type RunResult struct {
 	Status       string          `json:"status"` // success | failed
 	ErrorMessage *string         `json:"error_message"`

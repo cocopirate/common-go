@@ -35,14 +35,21 @@ func Result(runErr error, durationMS int64, payload any) RunResult {
 //
 // scheduler 侧是 datatypes.JSON(payload.Result): len==0 落库是 SQL NULL, 而字面量 null
 // 是 4 字节, 落成 jsonb 的 'null' —— API 响应会从"没有 result 键"变成 "result": null,
-// 是一次安静发生的契约变更。typed nil 指针走的是 interface 非 nil 分支, 是最容易漏的一种,
-// 所以这里用 reflect 兜而不是只判 payload == nil。
+// 是一次安静发生的契约变更。
+//
+// **不能只判 payload == nil**: 指针 / map / 切片一旦装进 interface 就不再是 nil interface,
+// 而 json.Marshal 对这些 typed nil 一律写出 "null" 而不是报错 —— 静悄悄地绕过这道检查。
+// 调用方写 `var m map[string]any …` 再传 m 是最常见的一种 (空 result 的自然写法),
+// 所以这里用 reflect 把同类都兜住, 而不是只挡最容易想到的指针。
 func marshalPayload(payload any) json.RawMessage {
 	if payload == nil {
 		return nil
 	}
-	if v := reflect.ValueOf(payload); v.Kind() == reflect.Ptr && v.IsNil() {
-		return nil
+	switch v := reflect.ValueOf(payload); v.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Interface, reflect.Chan, reflect.Func:
+		if v.IsNil() {
+			return nil
+		}
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
