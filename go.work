@@ -33,6 +33,6 @@ replace github.com/cocopirate/common-go/redisx v0.1.0 => ./redisx
 
 replace github.com/cocopirate/common-go/telemetry v0.1.9 => ./telemetry
 
-replace github.com/cocopirate/common-go/taskbus v0.1.1 => ./taskbus
+replace github.com/cocopirate/common-go/taskbus v0.1.2 => ./taskbus
 
 replace github.com/cocopirate/common-go/yop v0.1.7 => ./yop
