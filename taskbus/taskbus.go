@@ -26,11 +26,26 @@ const (
 	DefaultRetryExchange = "opengo.tasks.retry"
 	DefaultDeadExchange  = "opengo.tasks.dead"
 
+	// 命令队列: scheduler 出站 (outbox) → 业务服务消费。
 	WorkorderQueue = "opengo.workorder.tasks"
 	LeadQueue      = "opengo.lead.tasks"
+	// LeadRakeQueue 单独一条队列, 而不是并进 LeadQueue:
+	//
+	//  1. 同一个队列上的多个消费者是 **load-balance 而不是广播** —— 一条消息只投给其中
+	//     一个。而消费循环是同步的 (见 Consumer.handleDelivery), 所以 rake sync 那种
+	//     全量翻页拉 legacy-bff 的长跑会把 call-check 的命令堵在队头;
+	//  2. 两类失败分开: rake 的失败风暴不会污染 call-check 的重试计数与 DLQ。
+	LeadRakeQueue = "opengo.lead.rake.tasks"
+	// 结果队列: 业务服务回报 → scheduler 消费, 方向与上面相反。正因为它反向,
+	// **发起 run 的业务服务也要在启动时 EnsureQueue 它**: exchange 上还没有绑定时,
+	// publisher confirm 依然 ACK, 消息会被静默丢弃 (见 Publisher.EnsureQueue)。
+	SchedulerQueue = "opengo.scheduler.tasks"
 
 	WorkorderAIAnalysisBatch = "workorder.ai_analysis.batch"
 	LeadTextCallCheck        = "lead.text_parse.call_check"
+	LeadKeziRakeOrderSync    = "lead.kezi_rake_order.sync"
+	// RunFinished 是唯一一条"回执"方向的消息: 其余 task type 都是 scheduler 发出的命令。
+	RunFinished = "scheduler.run.finished"
 )
 
 // Message is the durable command envelope. Params is a snapshot from the
@@ -60,6 +75,27 @@ func NewMessage(runID, taskID int64, taskType string, params json.RawMessage, sc
 		Attempt:     1,
 		ScheduledAt: scheduledAt,
 	}
+}
+
+// RunResult 是一次调度运行的完成结果, 既是 RunFinished 消息的 params, 也是
+// POST /internal/runs/:id/finish 的 body —— 两条通道共用这一个定义, 免得形状漂移。
+// merchant-service 与 download-service 仍走 HTTP 那条, 所以改名会同时打断它们。
+type RunResult struct {
+	Status       string          `json:"status"` // success | failed
+	ErrorMessage *string         `json:"error_message"`
+	DurationMS   int64           `json:"duration_ms"`
+	Result       json.RawMessage `json:"result,omitempty"`
+}
+
+// NewRunResultMessage 构造业务服务回报 run 结束的信封。taskID 回显触发本次运行的命令
+// 消息的 Message.TaskID, 让 scheduler 侧的日志不经 run 表就能对上任务。
+func NewRunResultMessage(runID, taskID int64, res RunResult) (Message, error) {
+	params, err := json.Marshal(res)
+	if err != nil {
+		// 只有 Result 携带非法 JSON 时才会走到这里。
+		return Message{}, fmt.Errorf("encode run result: %w", err)
+	}
+	return NewMessage(runID, taskID, RunFinished, params, nil), nil
 }
 
 func (m Message) Validate() error {
@@ -196,6 +232,16 @@ func (p *Publisher) Publish(ctx context.Context, routingKey string, msg Message)
 
 func (p *Publisher) PublishRetry(ctx context.Context, routingKey string, msg Message) error {
 	return p.publish(ctx, p.cfg.RetryExchange, routingKey, msg)
+}
+
+// PublishRunResult 回报一次 run 的完成结果。路由键固定在包里, 不交给调用方 ——
+// 三个业务服务各拼一遍就等于三处都能拼错, 而拼错的后果是消息被静默丢弃。
+func (p *Publisher) PublishRunResult(ctx context.Context, runID, taskID int64, res RunResult) error {
+	msg, err := NewRunResultMessage(runID, taskID, res)
+	if err != nil {
+		return err
+	}
+	return p.Publish(ctx, RunFinished, msg)
 }
 
 // EnsureQueue declares the durable queue and its retry/dead-letter topology
