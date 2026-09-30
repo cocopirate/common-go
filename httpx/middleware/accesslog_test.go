@@ -215,3 +215,60 @@ func TestAccessLogTargetFields(t *testing.T) {
 		t.Errorf("target_url not recorded, got %v", m["target_url"])
 	}
 }
+
+// 大响应不能把整个 body 留在内存里：捕获按 HTTP_LOG_BODY_MAX_BYTES 封顶，
+// 超出的部分丢弃并置 _truncated。网关会代理下载/导出产物，不封顶时并发几个
+// 大响应就足以把堆顶起来。
+func TestAccessLogResponseCaptureIsCapped(t *testing.T) {
+	os.Setenv("HTTP_LOG_BODY_SAMPLE_RATE", "1")
+	os.Setenv("HTTP_LOG_BODY_MAX_BYTES", "16")
+	defer os.Unsetenv("HTTP_LOG_BODY_SAMPLE_RATE")
+	defer os.Unsetenv("HTTP_LOG_BODY_MAX_BYTES")
+
+	log, cap := newTestLogger()
+	r := gin.New()
+	r.Use(AccessLog(log))
+	r.GET("/big", func(c *gin.Context) {
+		c.String(200, strings.Repeat("x", 64*1024))
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/big", nil))
+
+	// 客户端仍应拿到完整响应 —— 被封顶的只是日志缓冲，不是响应本身。
+	if w.Body.Len() != 64*1024 {
+		t.Fatalf("响应被改动了: %d 字节", w.Body.Len())
+	}
+	m := lastLogEntry(t, cap)
+	body, _ := m["resp_body"].(string)
+	if len(body) > 16 {
+		t.Errorf("resp_body 应当封顶在 16 字节, 实际 %d: %q", len(body), body)
+	}
+	if m["_truncated"] != true {
+		t.Errorf("超限时 _truncated 应当为 true, 实际 %v", m["_truncated"])
+	}
+}
+
+// 未超限时不应打上 _truncated：封顶的缓冲长度恰好等于上限时最容易误判。
+func TestAccessLogResponseExactlyAtCapIsNotTruncated(t *testing.T) {
+	os.Setenv("HTTP_LOG_BODY_SAMPLE_RATE", "1")
+	os.Setenv("HTTP_LOG_BODY_MAX_BYTES", "16")
+	defer os.Unsetenv("HTTP_LOG_BODY_SAMPLE_RATE")
+	defer os.Unsetenv("HTTP_LOG_BODY_MAX_BYTES")
+
+	log, cap := newTestLogger()
+	r := gin.New()
+	r.Use(AccessLog(log))
+	r.GET("/exact", func(c *gin.Context) {
+		c.String(200, "0123456789abcdef") // 正好 16 字节，分两次写
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/exact", nil))
+
+	m := lastLogEntry(t, cap)
+	if m["resp_body"] != "0123456789abcdef" {
+		t.Errorf("resp_body=%q", m["resp_body"])
+	}
+	if _, ok := m["_truncated"]; ok {
+		t.Errorf("正好等于上限不应标记 _truncated")
+	}
+}

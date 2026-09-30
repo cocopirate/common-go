@@ -70,8 +70,8 @@ func AccessLog(log *zap.Logger) gin.HandlerFunc {
 			reqBody = bodyBytes
 		}
 
-		// 捕获响应体（不截断，截断只在日志写入时按 maxBytes 执行）
-		rw := &captureWriter{ResponseWriter: c.Writer}
+		// 捕获响应体（按 maxBytes 封顶，超出的部分不留）
+		rw := &captureWriter{ResponseWriter: c.Writer, maxBytes: maxBytes}
 		c.Writer = rw
 
 		c.Next()
@@ -112,7 +112,7 @@ func AccessLog(log *zap.Logger) gin.HandlerFunc {
 			}
 			if b, truncated := maskAndTruncate(rw.body, re, maxBytes); b != "" {
 				fields = append(fields, zap.String("resp_body", b))
-				if truncated {
+				if truncated || rw.overflow {
 					fields = append(fields, zap.Bool("_truncated", true))
 				}
 			}
@@ -124,20 +124,64 @@ func AccessLog(log *zap.Logger) gin.HandlerFunc {
 
 // ─── body 捕获 ────────────────────────────────────────────────────────────────
 
-// captureWriter 拦截响应写入，完整捕获 body。
+// captureWriter 拦截响应写入，捕获 body 用于访问日志。
+//
+// 捕获量封顶 maxBytes —— 日志本身也只留这么多（见 maskAndTruncate），再多录
+// 只是把整个响应字面留在内存里。缓冲原来是无上限的，而经这个中间件的响应不
+// 全是小 JSON：网关/legacy-bff 会代理下载与导出产物，几个并发大响应就足以把
+// 堆顶起来。
+//
+// 副作用一：超限后截断点可能落在一个敏感字段中间，那段残缺的值不会被脱敏
+// （脱敏靠完整的 `"key":"value"` 才能匹配上）。这类响应只可能是 MB 级的大
+// 响应，不是接口的 JSON 信封；日志里同时置 _truncated 说明 body 不完整。
+// 副作用二：_truncated 由 overflow 决定，不再由 maskAndTruncate 的长度比较
+// 决定 —— 缓冲已经被我们自己截过一次，长度永远不再超过 maxBytes。
 type captureWriter struct {
 	gin.ResponseWriter
-	body []byte
+	body     []byte
+	maxBytes int
+	overflow bool
 }
 
 func (w *captureWriter) Write(b []byte) (int, error) {
-	w.body = append(w.body, b...)
+	w.captureBytes(b)
 	return w.ResponseWriter.Write(b)
 }
 
 func (w *captureWriter) WriteString(s string) (int, error) {
-	w.body = append(w.body, s...)
+	w.captureString(s)
 	return w.ResponseWriter.WriteString(s)
+}
+
+// captureBytes 追加到上限为止；超限只记标志，不再持有更多字节。
+func (w *captureWriter) captureBytes(b []byte) {
+	if w.overflow {
+		return
+	}
+	if remaining := w.maxBytes - len(w.body); remaining < len(b) {
+		w.overflow = true
+		if remaining > 0 {
+			w.body = append(w.body, b[:remaining]...)
+		}
+		return
+	}
+	w.body = append(w.body, b...)
+}
+
+// captureString 与 captureBytes 同理，单独一份是为了不在热路径上把 string
+// 转成 []byte（那正好又是我们想省掉的那次全量拷贝）。
+func (w *captureWriter) captureString(s string) {
+	if w.overflow {
+		return
+	}
+	if remaining := w.maxBytes - len(w.body); remaining < len(s) {
+		w.overflow = true
+		if remaining > 0 {
+			w.body = append(w.body, s[:remaining]...)
+		}
+		return
+	}
+	w.body = append(w.body, s...)
 }
 
 // readBody 读取完整请求体。
