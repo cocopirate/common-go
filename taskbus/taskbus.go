@@ -68,6 +68,19 @@ const (
 	//  2. 它的失败模式 (银行侧 / SFTP / 凭据) 与另外两条 (上游服务 / DB) 完全不同,
 	//     分开让重试计数与 DLQ 互不污染。
 	FinanceReconQueue = "opengo.finance.recon.tasks"
+	// FinanceReconBackfillQueue 只承载平安对账多日补账一条命令, 与 FinanceReconQueue 分家:
+	//
+	//  1. 它是**批量**命令 —— 一次最多 31 天, 每天都把日结那条的串行 sweep (300 秒预算)
+	//     完整走一遍, 小时级。并进 FinanceReconQueue 会让每天 01:00 的日结命令堵在队头,
+	//     一直堵到自己的 timeout_seconds 超时 —— 那是一条"日结超时"的假故障,
+	//     同 LeadRakeQueue 的拆分理由;
+	//  2. 两者的失败模式也不同: 日结失败=今天的账没结 (要立刻知道), 补账失败=某段历史
+	//     没补齐 (可以慢慢重跑), 分开让重试计数与 DLQ 互不污染。
+	//
+	// 两条队列**消费的是同一把全局 Redis 锁** (finance-service 的
+	// finance:pingan:recon:sync_lock), 所以补账与日结之间仍然是串行的 —— 分队列解决的是
+	// 排队导致的假超时, 不是并发。
+	FinanceReconBackfillQueue = "opengo.finance.recon.backfill.tasks"
 	// DashboardQueue 只承载数据来源渠道同步一条命令, 所以不另拆。
 	DashboardQueue = "opengo.dashboard.tasks"
 	// 结果队列: 业务服务回报 → scheduler 消费, 方向与上面相反。正因为它反向,
@@ -88,8 +101,14 @@ const (
 	// nil, 只有缺参数 / 未配置 / 已有一轮在跑三种情况才有 error。真正的结论逐类型算:
 	// no_file/skipped 是正常业务事实, failed/not_delivered/pending 才算没拿到结论。
 	// 判定实现在 finance-service 的 internal/pingan (状态词表的归属地)。
-	FinancePinganReconSync    = "finance.pingan.recon.sync"
-	DashboardSourceOptionSync = "dashboard.source_option.sync"
+	FinancePinganReconSync = "finance.pingan.recon.sync"
+	// FinancePinganReconBackfill 是同一个 sweep 的**多日**版本: 按天循环调用
+	// pingan.RunSweep, 每天独立 run_id、独立日志、单独拿锁放锁 (不跨天持锁 —— 锁 TTL
+	// 30 分钟, 长批次跨天持锁会在中途失效)。参数与 workorder.ai_analysis.batch 同形:
+	// days 与 start_time/end_time 互斥, 跨度上限 31 天; 差别是 days:N 以**昨天**为终点
+	// (银行当天不生成当天文件)。逐日容错、互不影响, 整轮成败 = 所有天都拿到结论。
+	FinancePinganReconBackfill = "finance.pingan.recon.backfill"
+	DashboardSourceOptionSync  = "dashboard.source_option.sync"
 	// RunFinished 是唯一一条"回执"方向的消息: 其余 task type 都是 scheduler 发出的命令。
 	RunFinished = "scheduler.run.finished"
 )
