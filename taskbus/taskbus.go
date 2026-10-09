@@ -52,6 +52,24 @@ const (
 	// 与 LeadRakeQueue 的拆分理由 (长跑堵住并列命令) 不冲突: 那两个是并列的同类命令、其中
 	// 一个长跑会堵住另一个; 这里两者本就该一前一后, 串行是想要的语义而不是代价。
 	MerchantQueue = "opengo.merchant.tasks"
+	// FinanceQueue 承载客资抽佣日账单与易宝资金账单两条日结命令, 不拆开:
+	//
+	//  1. 两条都是"受理/生成"型 —— 一个按网点生成账单, 一个只是把易宝的取数登记成
+	//     一行任务 (真正的同步由易宝回调触发), 秒级到分钟级, 没有长跑堵队头的问题;
+	//  2. 两者之间没有顺序依赖, 也不抢同一个下游 —— 与 MerchantQueue 的"故意串行"
+	//     不同, 这里共享只是省一条队列, 代价是后到的那条要等前面跑完,
+	//     所以两条任务的 timeout_seconds 都要把排队时间算进去。
+	FinanceQueue = "opengo.finance.tasks"
+	// FinanceReconQueue 只承载平安对账同步一条命令, 单独一条队列:
+	//
+	//  1. 它是**分钟级串行 sweep** (六类逐类查文件 + SFTP 下载解密解压 + 逐行入库,
+	//     总预算 300 秒, 见 finance-service 的 pingan.SweepBudget), 而消费循环是同步的 ——
+	//     并进 FinanceQueue 会把那两条日结命令堵在队头, 同 LeadRakeQueue 的拆分理由;
+	//  2. 它的失败模式 (银行侧 / SFTP / 凭据) 与另外两条 (上游服务 / DB) 完全不同,
+	//     分开让重试计数与 DLQ 互不污染。
+	FinanceReconQueue = "opengo.finance.recon.tasks"
+	// DashboardQueue 只承载数据来源渠道同步一条命令, 所以不另拆。
+	DashboardQueue = "opengo.dashboard.tasks"
 	// 结果队列: 业务服务回报 → scheduler 消费, 方向与上面相反。正因为它反向,
 	// **发起 run 的业务服务也要在启动时 EnsureQueue 它**: exchange 上还没有绑定时,
 	// publisher confirm 依然 ACK, 消息会被静默丢弃 (见 Publisher.EnsureQueue)。
@@ -63,6 +81,15 @@ const (
 	DownloadExportArtifactCleanup = "download.export_artifact.cleanup"
 	MerchantMarketDeclareSubmit   = "merchant.market_declare.submit"
 	MerchantStoreRevenueCompute   = "merchant.store_revenue.compute"
+
+	FinanceKeziRakeBillDailyGenerate = "finance.kezi_rake_bill.daily.generate"
+	FinanceYeepayFundBillSync        = "finance.yeepay.fundbill.sync"
+	// FinancePinganReconSync 的成败判定不看 Sync 返回的 error —— 六类全失败它也可能返回
+	// nil, 只有缺参数 / 未配置 / 已有一轮在跑三种情况才有 error。真正的结论逐类型算:
+	// no_file/skipped 是正常业务事实, failed/not_delivered/pending 才算没拿到结论。
+	// 判定实现在 finance-service 的 internal/pingan (状态词表的归属地)。
+	FinancePinganReconSync    = "finance.pingan.recon.sync"
+	DashboardSourceOptionSync = "dashboard.source_option.sync"
 	// RunFinished 是唯一一条"回执"方向的消息: 其余 task type 都是 scheduler 发出的命令。
 	RunFinished = "scheduler.run.finished"
 )
