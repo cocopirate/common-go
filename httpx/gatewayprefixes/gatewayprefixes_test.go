@@ -161,6 +161,7 @@ func TestCheckCoverage(t *testing.T) {
 
 func TestVerifyMountedFilters(t *testing.T) {
 	routes := []gin.RouteInfo{
+		{Method: http.MethodGet, Path: EndpointPath},
 		{Method: http.MethodGet, Path: "/health"},
 		{Method: http.MethodGet, Path: "/metrics"},
 		{Method: http.MethodGet, Path: "/internal/gateway/public-routes"},
@@ -173,5 +174,25 @@ func TestVerifyMountedFilters(t *testing.T) {
 	err := VerifyMounted(routes, nil)
 	if err == nil || !strings.Contains(err.Error(), "/api/v1/auth/login") {
 		t.Errorf("期望点名未覆盖的 /api 路由: %v", err)
+	}
+}
+
+func TestVerifyMountedRequiresItsOwnEndpoint(t *testing.T) {
+	// 漏挂自述端点时网关只会静默回落静态表/缓存，症状是「线上声明没生效」——
+	// 必须在启动期报出来，而不是等网关日志里那次 404。
+	err := VerifyMounted([]gin.RouteInfo{
+		{Method: http.MethodGet, Path: "/api/v1/auth/login"},
+	}, []string{"/api/v1/auth"})
+	if err == nil || !strings.Contains(err.Error(), EndpointPath) || !strings.Contains(err.Error(), "未挂载") {
+		t.Errorf("期望报自述端点未挂载: %v", err)
+	}
+
+	// 挂了但方法不对（POST）同样不算 —— 网关用的是 GET。
+	err = VerifyMounted([]gin.RouteInfo{
+		{Method: http.MethodPost, Path: EndpointPath},
+		{Method: http.MethodGet, Path: "/api/v1/auth/login"},
+	}, []string{"/api/v1/auth"})
+	if err == nil || !strings.Contains(err.Error(), "未挂载") {
+		t.Errorf("POST 挂载不算数，期望报未挂载: %v", err)
 	}
 }

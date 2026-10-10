@@ -11,6 +11,7 @@ package gatewayprefixes
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"unicode"
 
@@ -167,10 +168,33 @@ func coveredBy(path string, prefixes []string) bool {
 	return false
 }
 
-// VerifyMounted 从 gin 的真实路由表做覆盖判定。过滤掉空 Method（NoRoute /
-// NoMethod 处理器）与非 /api/ 路径（/health、/metrics、/internal/**），
-// 剩下的交给 CheckCoverage。典型用法：路由装配完成后、监听之前调用，出错 Fatal。
+// VerifyMounted 从 gin 的真实路由表做两项判定。典型用法：路由装配完成后、
+// 监听之前调用，出错 Fatal。
+//
+//  1. 本端点（EndpointPath）确实挂载了 —— 漏挂/挂到别的路径时，网关侧只会
+//     静默回落到静态表或缓存，症状是「声明改了但线上没变」而没有任何报错，
+//     必须在这里变成启动失败；
+//  2. /api/ 路由与声明的互相覆盖，见 CheckCoverage。
+//
+// 过滤：空 Method（NoRoute / NoMethod 处理器）与非 /api/ 路径（/health、
+// /metrics、/internal/** 自身）不参与第 2 项。
 func VerifyMounted(routes []gin.RouteInfo, declared []string, exemptions ...Exemption) error {
+	var errs []error
+
+	endpointMounted := false
+	for _, ri := range routes {
+		// gin 把 NoRoute 记成 Method=""；这里要求的是 GET 真实路由。
+		if ri.Method == http.MethodGet && ri.Path == EndpointPath {
+			endpointMounted = true
+			break
+		}
+	}
+	if !endpointMounted {
+		errs = append(errs, fmt.Errorf(
+			"自述端点 %s (GET) 未挂载：网关抓不到它，只会静默回落静态表/缓存，声明永远不会生效",
+			EndpointPath))
+	}
+
 	mounted := make([]string, 0, len(routes))
 	for _, ri := range routes {
 		if ri.Method == "" {
@@ -181,5 +205,7 @@ func VerifyMounted(routes []gin.RouteInfo, declared []string, exemptions ...Exem
 		}
 		mounted = append(mounted, ri.Path)
 	}
-	return CheckCoverage(mounted, declared, exemptions...)
+	errs = append(errs, CheckCoverage(mounted, declared, exemptions...))
+
+	return errors.Join(errs...)
 }
