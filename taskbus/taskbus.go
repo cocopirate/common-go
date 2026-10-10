@@ -147,7 +147,10 @@ func NewMessage(runID, taskID int64, taskType string, params json.RawMessage, sc
 // 它从前还要同时充当 POST /internal/runs/:id/finish 的 body —— 那条 HTTP 回执通道随
 // merchant-service (最后一个调用方) 迁移而删除, 现在只剩 MQ 一条路。
 type RunResult struct {
-	Status       string          `json:"status"` // success | failed
+	Status string `json:"status"` // success | failed
+	// ErrorCode 只在 failed 时有值, 是错误分类的唯一机器可读出口 (见 ErrorCode 与 ErrCode*)。
+	// 老生产者不填, 于是历史回执与灰度期的回执都是空串, 落库为 NULL。
+	ErrorCode    ErrorCode       `json:"error_code,omitempty"`
 	ErrorMessage *string         `json:"error_message"`
 	DurationMS   int64           `json:"duration_ms"`
 	Result       json.RawMessage `json:"result,omitempty"`
