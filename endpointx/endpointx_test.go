@@ -184,12 +184,11 @@ func TestBaseURL(t *testing.T) {
 	}
 }
 
-// BindWith 的核心行为：表优先，其次旧变量，其次编译默认值，最后按 Mode 决定致命与否。
-func TestBindResolutionOrder(t *testing.T) {
+// BindWith 的核心行为：表是唯一来源，缺名按 Mode 决定是启动失败还是关闭该能力。
+func TestBindResolution(t *testing.T) {
 	t.Run("表里有时用表", func(t *testing.T) {
-		t.Setenv("MEDIA_SERVICE_URL", "http://legacy:1")
 		tbl, _ := Parse("media=http://table:2")
-		set, err := BindWith(tbl, Dep{Name: "media", Mode: Required, LegacyEnv: "MEDIA_SERVICE_URL", Default: "http://default:3"})
+		set, err := BindWith(tbl, Dep{Name: "media", Mode: Required})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -204,57 +203,30 @@ func TestBindResolutionOrder(t *testing.T) {
 		}
 	})
 
-	t.Run("表里没有时用旧变量", func(t *testing.T) {
-		t.Setenv("MEDIA_SERVICE_URL", "http://legacy:1/")
+	t.Run("Required 缺名则报错并点名", func(t *testing.T) {
 		tbl, _ := Parse("other=http://other:9")
-		set, err := BindWith(tbl, Dep{Name: "media", Mode: Required, LegacyEnv: "MEDIA_SERVICE_URL", Default: "http://default:3"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := set.URL("media"); got != "http://legacy:1" {
-			t.Errorf("URL = %q, 期望旧变量值并去掉结尾斜杠", got)
-		}
-		if src := set.Peer("media").Source; src != SourceLegacy {
-			t.Errorf("Source = %v, 期望 %v", src, SourceLegacy)
-		}
-		if len(set.Warnings()) == 0 {
-			t.Error("走旧变量兜底时应给出警告")
-		}
-	})
-
-	t.Run("旧变量也没设时用编译默认值", func(t *testing.T) {
-		tbl, _ := Parse("")
-		set, err := BindWith(tbl, Dep{Name: "media", Mode: Required, LegacyEnv: "MEDIA_SERVICE_URL", Default: "http://default:3"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := set.URL("media"); got != "http://default:3" {
-			t.Errorf("URL = %q, 期望编译默认值", got)
-		}
-		if src := set.Peer("media").Source; src != SourceDefault {
-			t.Errorf("Source = %v, 期望 %v", src, SourceDefault)
-		}
-		if len(set.Warnings()) == 0 {
-			t.Error("走编译默认值时应给出警告")
-		}
-	})
-
-	t.Run("Required 全缺则报错并点名", func(t *testing.T) {
-		tbl, _ := Parse("other=http://other:9")
-		_, err := BindWith(tbl, Dep{Name: "media", Mode: Required, LegacyEnv: "MEDIA_SERVICE_URL"})
+		_, err := BindWith(tbl, Dep{Name: "media", Mode: Required})
 		if err == nil {
 			t.Fatal("应当报错")
 		}
-		for _, want := range []string{"media", EnvName, "MEDIA_SERVICE_URL"} {
+		// 错误信息要能直接告诉人去哪儿补：变量名、名字、以及本地开发看哪里。
+		for _, want := range []string{"media", EnvName, ".env.example"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("错误信息 %q 未点名 %q", err.Error(), want)
 			}
 		}
 	})
 
-	t.Run("Optional 全缺则视为关闭", func(t *testing.T) {
+	t.Run("整张表都没配时 Required 同样报错", func(t *testing.T) {
 		tbl, _ := Parse("")
-		set, err := BindWith(tbl, Dep{Name: "download", Mode: Optional, LegacyEnv: "DOWNLOAD_SERVICE_URL"})
+		if _, err := BindWith(tbl, Dep{Name: "media", Mode: Required}); err == nil {
+			t.Error("没有表时 Required 对端应当报错，而不是静默用某个默认地址")
+		}
+	})
+
+	t.Run("Optional 缺名则视为关闭", func(t *testing.T) {
+		tbl, _ := Parse("")
+		set, err := BindWith(tbl, Dep{Name: "download", Mode: Optional})
 		if err != nil {
 			t.Fatalf("Optional 缺失不应报错: %v", err)
 		}
@@ -288,25 +260,6 @@ func TestBindDisabledConflictsWithRequired(t *testing.T) {
 	}
 	if set.Enabled("media") {
 		t.Error("哨兵关闭时不应 Enabled")
-	}
-}
-
-// 兼容期的关键保证：旧变量的哨兵语义不能丢，否则 finance 的 MEDIA_SERVICE_URL=off 会
-// 被当成一个叫 "off" 的地址。
-func TestLegacySentinelPreserved(t *testing.T) {
-	t.Setenv("MEDIA_SERVICE_URL", "off")
-	tbl, _ := Parse("other=http://other:9")
-
-	set, err := BindWith(tbl, Dep{Name: "media", Mode: Optional, LegacyEnv: "MEDIA_SERVICE_URL", Default: "http://default:3"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if set.Enabled("media") {
-		t.Errorf("旧变量为哨兵时应关闭，而不是回落到默认值；实际 %q", set.URL("media"))
-	}
-
-	if _, err := BindWith(tbl, Dep{Name: "media", Mode: Required, LegacyEnv: "MEDIA_SERVICE_URL"}); err == nil {
-		t.Error("Required + 旧变量哨兵应当报错")
 	}
 }
 
@@ -346,12 +299,11 @@ func TestBindIgnoresUnconsumedNames(t *testing.T) {
 }
 
 func TestSetFields(t *testing.T) {
-	t.Setenv("MEDIA_SERVICE_URL", "")
 	tbl, _ := Parse("gateway=http://gw:7099,download=off")
 	set, err := BindWith(tbl,
 		Dep{Name: "gateway", Mode: Required},
 		Dep{Name: "download", Mode: Optional},
-		Dep{Name: "media", Mode: Optional, Default: "http://media:7009"},
+		Dep{Name: "media", Mode: Optional},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +311,7 @@ func TestSetFields(t *testing.T) {
 	want := []string{
 		"download=disabled",
 		"gateway=service_urls(http://gw:7099)",
-		"media=default(http://media:7009)",
+		"media=disabled",
 	}
 	got := set.Fields()
 	if len(got) != len(want) {

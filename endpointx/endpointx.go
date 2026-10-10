@@ -68,8 +68,8 @@ type Table struct {
 // 对内部调用来说"跳过"等于"该能力被静默关闭"，而"关闭"在本系统里是一个有专门写法
 // 的状态 (哨兵)，两者混淆之后现场分不清"故意关的"和"名字写错了"。
 //
-// 空串 raw 返回 configured=false 的空表且不是错误 —— 兼容期与单服务 go run 都依赖
-// 这一点；缺表是否致命由 Bind 按 Dep.Mode 决定，不由 Parse 决定。
+// 空串 raw 返回 configured=false 的空表且不是错误 —— "没有表"本身是一种状态 (本地
+// 没配、部署里的表为空)，致命与否由 Bind 按 Dep.Mode 决定，不由 Parse 决定。
 //
 // 错误用 errors.Join 一次报全，不是遇到第一个就返回：部署表出错时一次启动就能看到
 // 全部问题，而不是改一条重启一次。
@@ -204,31 +204,24 @@ func (m Mode) String() string {
 //
 // 声明写在消费侧代码里 (通常在 config.Load)，**不是**部署 YAML：依赖关系本来就在
 // 代码里 (客户端构造函数取的就是这个地址)，放在这里不会漂移；放在 YAML 会。
+//
+// 这里只有名字和 Mode，没有"旧变量名"与"编译默认值"—— 那两个字段是兼容期的脚手架，
+// 已在迁移收尾时删除。删掉的效果不只是少两行：还写着它们的服务**编译不过**，编译器
+// 替你证明迁移真的做完了，也证明二进制里不再有第二个地址来源。
 type Dep struct {
 	// Name 是表里的名字，如 "download"。
 	Name string
+	// Mode 决定这个名字缺失时是启动失败 (Required) 还是关闭该能力 (Optional)。
 	Mode Mode
-
-	// LegacyEnv 是兼容期的旧变量名 (如 "DOWNLOAD_SERVICE_URL")。
-	//
-	// 迁移收尾时**删掉这个字段**：删掉之后还写着 LegacyEnv 的服务编译不过，
-	// 编译器替你证明迁移真的做完了。
-	LegacyEnv string
-
-	// Default 是编译进二进制的兜底，即旧 getEnv 的第二个参数。
-	// 兼容期保留原值；收尾时清空，让"缺配置"在启动时暴露，而不是在第一次请求时
-	// 变成一个指向容器名的连接错误。
-	Default string
 }
 
 // Source 记录一个地址是从哪来的，打进启动日志用于排查"这个地址到底从哪读的"。
+// 兼容期的 legacy_env / default 两个取值已随脚手架一并删除。
 type Source string
 
 const (
 	SourceTable    Source = "service_urls" // 表里显式给的
-	SourceLegacy   Source = "legacy_env"   // 兼容期：旧变量兜底
-	SourceDefault  Source = "default"      // 编译进二进制的默认值
-	SourceDisabled Source = "disabled"     // 哨兵或 Optional 缺失
+	SourceDisabled Source = "disabled"     // 哨兵，或 Optional 缺名
 )
 
 // Peer 是一个对端的解析结果。
@@ -248,11 +241,10 @@ type Set struct {
 // Bind 读进程环境里的地址表并按 deps 解析。
 // 所有问题一次返回 (errors.Join)，不是遇到第一个就退出。
 //
-// 每个 Dep 的解析顺序：
+// 每个 Dep 只有三种结局 —— 表是唯一来源，没有兜底：
 //  1. 表里有这个名字 → 用它 (哨兵 → 关闭；Required + 哨兵 → 错误，声明必填却被显式关闭)
-//  2. 否则 LegacyEnv 有非空值 → 用它，记 legacy_env (调用方应打 WARN)
-//  3. 否则 Default 非空 → 用它，记 default
-//  4. 否则 Required → 错误 / Optional → 关闭
+//  2. 表里没有 + Required → 错误，点名缺哪个名字、该往哪个变量里补
+//  3. 表里没有 + Optional → 关闭该能力 (记一条 WARN)
 func Bind(deps ...Dep) (*Set, error) {
 	t, err := FromEnv()
 	if err != nil {
@@ -305,38 +297,13 @@ func resolve(t *Table, dep Dep) (Peer, string, error) {
 			fmt.Sprintf("对端 %s 被 %s 显式关闭，相关能力将不可用", dep.Name, EnvName), nil
 	}
 
-	// 表里没有：兼容期依次回落到旧变量与编译默认值。
-	if dep.LegacyEnv != "" {
-		if v := strings.TrimSpace(os.Getenv(dep.LegacyEnv)); v != "" {
-			switch {
-			case isSentinel(v):
-				if dep.Mode == Required {
-					return Peer{}, "", fmt.Errorf(
-						"对端 %q 声明为必填，但 %s=%q 把它显式关闭了", dep.Name, dep.LegacyEnv, v)
-				}
-				return Peer{Name: dep.Name, Source: SourceDisabled},
-					fmt.Sprintf("对端 %s 被 %s=%s 显式关闭，相关能力将不可用", dep.Name, dep.LegacyEnv, v), nil
-			default:
-				return Peer{Name: dep.Name, URL: strings.TrimRight(v, "/"), Source: SourceLegacy},
-					fmt.Sprintf("%s 里没有 %q，暂用旧变量 %s 兜底；迁移收尾时应删除 %s",
-						EnvName, dep.Name, dep.LegacyEnv, dep.LegacyEnv), nil
-			}
-		}
-	}
-
-	if dep.Default != "" {
-		return Peer{Name: dep.Name, URL: strings.TrimRight(dep.Default, "/"), Source: SourceDefault},
-			fmt.Sprintf("%s 里没有 %q，暂用编译默认值 %s", EnvName, dep.Name, dep.Default), nil
-	}
-
+	// 表里没有这个名字。可能是整张表都没配 (本地裸跑)，也可能是表里确实漏了这一条 ——
+	// 两种情况对调用方是同一件事：没有地址可用，按 Mode 决定致命还是关闭。
 	if dep.Mode == Required {
-		hint := ""
-		if dep.LegacyEnv != "" {
-			hint = fmt.Sprintf("，旧变量 %s 也没设", dep.LegacyEnv)
-		}
 		return Peer{}, "", fmt.Errorf(
-			"%s 里缺少必填对端 %q%s。请在部署的地址表里补 %s=http://<host>:<port>",
-			EnvName, dep.Name, hint, dep.Name)
+			"%s 里缺少必填对端 %q。请在部署的地址表里补 %s=http://<host>:<port>；"+
+				"本地单跑见该服务 .env.example 里的最小表",
+			EnvName, dep.Name, dep.Name)
 	}
 	return Peer{Name: dep.Name, Source: SourceDisabled},
 		fmt.Sprintf("%s 里没有 %q，该能力视为关闭", EnvName, dep.Name), nil
@@ -387,11 +354,12 @@ func (s *Set) Fields() []string {
 	return out
 }
 
-// Warnings 返回应当以 WARN 级别打出的提示：仍在使用旧变量兜底、仍在用编译默认值、
-// 或某个 Optional 对端没有配。
+// Warnings 返回应当以 WARN 级别打出的提示，只有两种：某个 Optional 对端在表里没有
+// (可能是故意关的，也可能是名字写错了)，或某个对端被写成哨兵显式关闭。
 //
-// 兼容期这些警告是**预期**的，它们正是"迁移还没做完"的进度指示；收尾之后应当归零，
-// 因此可以作为验收条件：全栈启动后 legacy_env / default 两类警告计数必须为 0。
+// 两种都是**合法**配置，留一行日志是为了半年后排查"这个能力为什么没生效"时，
+// boot 日志里那行比翻部署文件快得多 —— 尤其是"名字写错一个字母"这种情况，
+// 它唯一的现场就在这里。
 func (s *Set) Warnings() []string {
 	if s == nil {
 		return nil
