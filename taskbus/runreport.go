@@ -72,6 +72,9 @@ const (
 // **不许改动类型自己的键**: 消费方 (控制台、历史 run) 按 `result.scanned` 这类路径直接
 // 读值, 重命名等于一次静默的契约变更。所以外壳是**加在旁边的兄弟键**, 走匿名嵌入
 // (encoding/json 会把嵌入结构体的字段展平, 于是 summary/counts 与类型专属键同级)。
+//
+// Summary/Counts 两个键名是**全平台保留**的: 类型自己的 payload 不许再出现同名键
+// (Merge 遇到就 panic)。
 type ResultShell struct {
 	// Summary 是一句话人话, 给控制台预览行、日志与通知用。
 	// 成功也可以有 (例如"本轮无可申报商户, 未生成批次"—— 那是成功带附言, 不是错误)。
@@ -87,15 +90,31 @@ type Counts struct {
 	Scanned int `json:"scanned,omitempty"` // 扫到 / 候选
 	Changed int `json:"changed,omitempty"` // 真正写入 / 删除 / 提交 / 生成
 	Skipped int `json:"skipped,omitempty"` // 因幂等或业务规则放过
-	Failed  int `json:"failed,omitempty"`  // 逐项失败: 整批 un 成功但这里有非零, 就是"成功带伤"
+	Failed  int `json:"failed,omitempty"`  // 逐项失败: 整批成功但这里有非零, 就是"成功带伤"
 }
+
+// IsZero 报告四个计数是不是全零。全零的 Counts 展示价值为零 (展平后是个没有信息量的
+// {}), 所以 **生产点只在确实有非零计数时才给指针** —— 0 与"不适用"在展示和告警里是
+// 两回事, 这里的取舍是: 说不清就不说, 而不是填一排 0。
+func (c Counts) IsZero() bool { return c == Counts{} }
 
 // Merge 把外壳并进一个 map 形状的 payload (finance 的几个任务用 map 攒 result)。
 // 与结构体嵌入路径产出**语义相同**的 JSON —— 单测钉住这一点, 两种写法不许漂移。
 //
 // 没有东西可并时原样返回 (可能为 nil), 保住 marshalPayload 那条"nil 即整条消失"的约定:
 // 凭空造一个空 map 会让 "没有 result 键" 变成 "result": {}。
+//
+// **payload 里已经有 summary / counts 键时 panic**: 这两个键是全平台保留的, 类型自带的
+// 同名键一律是编码错误 (从前 finance.pingan.recon.backfill 就自带一个 summary 对象, 静默
+// 覆盖会让文档化的逐日汇总无声消失)。panic 而不是"最后写的赢": 这是确定性的编程错误,
+// 任何覆盖它的路径都该在第一个测试里就炸, 而不是等控制台上少了一个键。
 func (s ResultShell) Merge(payload map[string]any) map[string]any {
+	if _, ok := payload["summary"]; ok && s.Summary != "" {
+		panic(`taskbus: payload already has a "summary" key; it is reserved for ResultShell.Summary`)
+	}
+	if _, ok := payload["counts"]; ok && s.Counts != nil {
+		panic(`taskbus: payload already has a "counts" key; it is reserved for ResultShell.Counts`)
+	}
 	if s.Summary == "" && s.Counts == nil {
 		return payload
 	}

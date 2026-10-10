@@ -214,6 +214,50 @@ func TestShellMergeKeepsNilPayloadWhenEmpty(t *testing.T) {
 	}
 }
 
+// summary / counts 是全平台保留键: payload 自带同名键 + 外壳也要写它 = 编码错误。
+// 静默覆盖的后果是文档化的类型专属键无声消失 (从前 finance 的补账 payload 就自带一个
+// summary 对象), 所以宁可 panic —— 它必须在第一个测试里炸, 而不是在生产上少一个键。
+func TestShellMergePanicsOnReservedKeyConflict(t *testing.T) {
+	cases := []struct {
+		name    string
+		shell   ResultShell
+		payload map[string]any
+	}{
+		{
+			name:    "existing summary vs summary",
+			shell:   ResultShell{Summary: "补账 3 天"},
+			payload: map[string]any{"summary": map[string]int{"ok": 3}},
+		},
+		{
+			name:    "existing counts vs counts",
+			shell:   ResultShell{Counts: &Counts{Changed: 1}},
+			payload: map[string]any{"counts": map[string]int{"changed": 1}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic on reserved key conflict")
+				}
+			}()
+			tc.shell.Merge(tc.payload)
+		})
+	}
+}
+
+// 外壳没打算写那个键时, payload 里同名的旧键不受打扰 —— 保留键的约束只针对"要覆盖"。
+func TestShellMergeLeavesUntouchedReservedKeyAlone(t *testing.T) {
+	payload := map[string]any{"summary": map[string]int{"ok": 3}}
+	got := (ResultShell{Counts: &Counts{Changed: 3}}).Merge(payload)
+	if _, ok := got["summary"].(map[string]int); !ok {
+		t.Fatalf("summary = %v, want untouched object", got["summary"])
+	}
+	if got["counts"] != payload["counts"] {
+		t.Fatalf("counts = %v, want merged", got["counts"])
+	}
+}
+
 func TestPublishForwardsRunAndTaskIDs(t *testing.T) {
 	pub := &fakeResultPublisher{}
 	Publish(context.Background(), pub, nil, 42, 43, OK(5, nil))
