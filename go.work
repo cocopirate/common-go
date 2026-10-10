@@ -3,8 +3,11 @@ go 1.25.0
 use (
 	./authx
 	./bootstrap
+	./configx
 	./dbx
+	./endpointx
 	./exportx
+	./gwclient
 	./httpx
 	./jobx
 	./logx
