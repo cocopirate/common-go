@@ -40,9 +40,9 @@ type APIHandler[T any, PT Record[T]] struct {
 	// 不设时回落到 response.UpstreamError (50001)。
 	ErrCode int
 
-	// Owner 解出每次请求的可见范围。**nil 表示这个服务不接入归属过滤** (行为与加这个字段
-	// 之前完全一致), 供尚未迁移的服务使用; 一旦设上, 四个端点全部强制过滤 —— 解不出范围
-	// 就是 403, 而不是"放行"。
+	// Owner 解出每次请求的可见范围。**必填**: nil 时四个端点一律 500 —— 归属过滤是导出
+	// 产物的硬要求 (产物里是未脱敏的客户数据), 漏接线绝不能退化成"谁都能看全部"; 一旦
+	// 设上, 四个端点全部强制过滤 —— 解不出范围就是 403, 而不是"放行"。
 	Owner OwnerFunc
 }
 
@@ -57,13 +57,14 @@ func (h *APIHandler[T, PT]) errCode() int {
 	return h.ErrCode
 }
 
-// scope 解出本次请求的可见范围; 解不出时写好 403 并返回 ok=false。
+// scope 解出本次请求的可见范围; 解不出时写响应并返回 ok=false。
 //
-// Owner 为 nil 映射成 ViewAll (保持未接入服务的行为), 而不是零值 —— 零值是"无效", 用它
-// 会让没配 Owner 的服务整个 403。
+// Owner 为 nil 是**接线错误** (忘了接), 不是一种模式: 回 500 而不是 ViewAll —— 这里
+// 谁都不该进得来, 而 403 会把人引去查权限。
 func (h *APIHandler[T, PT]) scope(c *gin.Context) (OwnerScope, bool) {
 	if h.Owner == nil {
-		return OwnerScope{ViewAll: true}, true
+		response.InternalServerError(c, "task ownership is not configured")
+		return OwnerScope{}, false
 	}
 	own := h.Owner(c)
 	if !own.Valid() {

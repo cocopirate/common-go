@@ -173,7 +173,7 @@ func coveredBy(path string, prefixes []string) bool {
 // 监听之前调用，出错 Fatal。
 //
 //  1. 本端点（EndpointPath）确实挂载了 —— 漏挂/挂到别的路径时，网关侧只会
-//     静默回落到静态表或缓存，症状是「声明改了但线上没变」而没有任何报错，
+//     静默回落到 Redis 缓存或上一轮内存，症状是「声明改了但线上没变」而没有任何报错，
 //     必须在这里变成启动失败；
 //  2. /api/ 路由与声明的互相覆盖，见 CheckCoverage。
 //
@@ -192,7 +192,7 @@ func VerifyMounted(routes []gin.RouteInfo, declared []string, exemptions ...Exem
 	}
 	if !endpointMounted {
 		errs = append(errs, fmt.Errorf(
-			"自述端点 %s (GET) 未挂载：网关抓不到它，只会静默回落静态表/缓存，声明永远不会生效",
+			"自述端点 %s (GET) 未挂载：网关抓不到它，只会静默回落 Redis 缓存/上一轮内存，声明永远不会生效",
 			EndpointPath))
 	}
 

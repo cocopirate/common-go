@@ -183,16 +183,18 @@ func TestNotifyReloadConnectionRefused(t *testing.T) {
 	}
 }
 
-// 未配置网关地址时静默返回，不发请求 —— 这是旧实现的既有行为。
-func TestNotifyReloadEmptyURLIsSilent(t *testing.T) {
+// 未配置网关地址：记一条 WARN 后返回，不发请求 —— 静默的话没人知道通知从未发出
+// (endpointx 把 gateway 声明为 Required 之后这本不该出现)。
+func TestNotifyReloadEmptyURLWarns(t *testing.T) {
 	core, logs := observer.New(zap.DebugLevel)
 	c := &Client{GatewayURL: "", Token: "tok", Log: zap.New(core), BaseDelay: time.Millisecond}
 
 	if c.NotifyReload(context.Background()) {
 		t.Error("无地址时不应返回成功")
 	}
-	if logs.Len() != 0 {
-		t.Errorf("无地址时应完全静默，实际 %v", logs.All())
+	entries := logs.FilterMessage("gateway reload notify skipped: gateway URL is not configured").All()
+	if len(entries) != 1 || entries[0].Level != zap.WarnLevel {
+		t.Fatalf("无地址时应打一条 WARN, 实际 %v", logs.All())
 	}
 }
 

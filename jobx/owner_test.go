@@ -354,26 +354,23 @@ func TestUnresolvableIdentityIsForbidden(t *testing.T) {
 	}
 }
 
-// TestNilOwnerKeepsLegacyBehavior — 没接 Owner 的服务行为完全不变 (否则加这个字段就等于
-// 悄悄改掉了尚未迁移的服务)。
-func TestNilOwnerKeepsLegacyBehavior(t *testing.T) {
+// TestNilOwnerFailsClosed — 没接 Owner 的服务四个端点一律 500, 绝不退化成"看全部":
+// 归属过滤是导出产物的硬要求 (产物里是未脱敏的客户数据), nil 只能是漏接线。
+func TestNilOwnerFailsClosed(t *testing.T) {
 	q, _ := newQueue(t)
 	h := NewAPIHandler(q, &fakeSigner{})
 	r := ownerRouter(h, anonymous)
 
-	enqueueOwned(t, q, "alice", false)
-	enqueueOwned(t, q, "bob", false)
+	mine := enqueueOwned(t, q, "alice", true)
 	unowned := mustEnqueue(t, q, "complaint_sync", nil, 0)
 
-	rec := do(t, r, http.MethodGet, "/tasks")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	for _, path := range []string{"/tasks", "/tasks/" + mine.ID.String(), "/tasks/" + unowned.ID.String() + "/artifact"} {
+		if rec := do(t, r, http.MethodGet, path); rec.Code != http.StatusInternalServerError {
+			t.Fatalf("nil Owner GET %s: status = %d, want 500 (body %s)", path, rec.Code, rec.Body.String())
+		}
 	}
-	if got := decodeList(t, rec); got.Data.Total != 3 {
-		t.Fatalf("total = %d, want all 3 rows while Owner is nil", got.Data.Total)
-	}
-	if rec := do(t, r, http.MethodGet, "/tasks/"+unowned.ID.String()); rec.Code != http.StatusOK {
-		t.Fatalf("nil Owner GET by id: status = %d, want 200", rec.Code)
+	if rec := do(t, r, http.MethodPost, "/tasks/"+mine.ID.String()+"/cancel"); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("nil Owner cancel: status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 

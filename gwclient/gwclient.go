@@ -7,11 +7,14 @@
 // # 收敛说明
 //
 // 本包替代各服务 cmd/ 下 20 份逐字重复的 notifyGatewayReload (约 440 行)。收敛时
-// 保留的行为：三态判定 (无地址 → 静默返回)、3 次尝试、1s/2s 递增退避、成功后 Info、
-// 失败后 Warn、X-Internal-Token 仅在非空时设置。
+// 保留的行为：3 次尝试、1s/2s 递增退避、成功后 Info、失败后 Warn、
+// X-Internal-Token 仅在非空时设置。
 //
-// 有意改掉的两点（都是正确性/可排障性修复，不是顺手重构）：
+// 有意改掉的三点（都是正确性/可排障性修复，不是顺手重构）：
 //
+//   - 原实现"无地址 → 静默返回"。endpointx 把 gateway 声明为 Required 之后地址为空
+//     是部署错误而不是正常态 (20 个调用方全部如此声明)，现在记一条 WARN 再返回 ——
+//     谁没在通知网关，日志里要能查出来。
 //   - 原实现在**最后一次**尝试失败后仍会 sleep 3 秒才返回。20 个调用点全是
 //     `go notifyGatewayReload(...)`，这 3 秒只让一个无人在等的 goroutine 多活一会儿，
 //     没有任何观察者，故去掉。
@@ -78,13 +81,14 @@ func NotifyReload(ctx context.Context, gatewayURL, internalToken string, log *za
 
 // NotifyReload 带退避重试地通知网关重载，返回是否成功。
 //
-// GatewayURL 为空时静默返回 false：这是"未配置网关地址"的情形，与"配置了但连不上"
-// 应当区分看待 —— 前者在 endpointx 把 gateway 声明为 Required 之后不该再出现，
-// 保留这个分支是为了兼容旧部署，不是允许它发生。
+// GatewayURL 为空时记一条 WARN 后返回 false：这是"未配置网关地址"的情形，与"配置了
+// 但连不上"应当区分看待。endpointx 把 gateway 声明为 Required 之后它不该再出现 ——
+// 但也不能静默（否则没人知道通知从未发出），更不值得 panic（一次通知失败不拖垮启动）。
 func (c *Client) NotifyReload(ctx context.Context) bool {
 	log := c.logger()
 	base := strings.TrimRight(c.GatewayURL, "/")
 	if base == "" {
+		log.Warn("gateway reload notify skipped: gateway URL is not configured")
 		return false
 	}
 	url := base + ReloadPath

@@ -178,7 +178,7 @@ func TestVerifyMountedFilters(t *testing.T) {
 }
 
 func TestVerifyMountedRequiresItsOwnEndpoint(t *testing.T) {
-	// 漏挂自述端点时网关只会静默回落静态表/缓存，症状是「线上声明没生效」——
+	// 漏挂自述端点时网关只会静默回落 Redis 缓存/上一轮内存，症状是「线上声明没生效」——
 	// 必须在启动期报出来，而不是等网关日志里那次 404。
 	err := VerifyMounted([]gin.RouteInfo{
 		{Method: http.MethodGet, Path: "/api/v1/auth/login"},
