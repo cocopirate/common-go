@@ -60,26 +60,21 @@ const (
 	//     不同, 这里共享只是省一条队列, 代价是后到的那条要等前面跑完,
 	//     所以两条任务的 timeout_seconds 都要把排队时间算进去。
 	FinanceQueue = "opengo.finance.tasks"
-	// FinanceReconQueue 只承载平安对账同步一条命令, 单独一条队列:
+	// FinanceReconBackfillQueue 承载平安对账的**全部**命令 —— 每天跑昨天 (days=1) 与
+	// 多日补账是同一个任务类型的两种参数写法, 单独一条队列 (对比对象是 FinanceQueue):
 	//
 	//  1. 它是**分钟级串行 sweep** (六类逐类查文件 + SFTP 下载解密解压 + 逐行入库,
-	//     总预算 300 秒, 见 finance-service 的 pingan.SweepBudget), 而消费循环是同步的 ——
-	//     并进 FinanceQueue 会把那两条日结命令堵在队头, 同 LeadRakeQueue 的拆分理由;
-	//  2. 它的失败模式 (银行侧 / SFTP / 凭据) 与另外两条 (上游服务 / DB) 完全不同,
-	//     分开让重试计数与 DLQ 互不污染。
-	FinanceReconQueue = "opengo.finance.recon.tasks"
-	// FinanceReconBackfillQueue 只承载平安对账多日补账一条命令, 与 FinanceReconQueue 分家:
-	//
-	//  1. 它是**批量**命令 —— 一次最多 31 天, 每天都把日结那条的串行 sweep (300 秒预算)
-	//     完整走一遍, 小时级。并进 FinanceReconQueue 会让每天 01:00 的日结命令堵在队头,
-	//     一直堵到自己的 timeout_seconds 超时 —— 那是一条"日结超时"的假故障,
+	//     总预算 300 秒, 见 finance-service 的 pingan.SweepBudget), 一次最多 31 天时更是
+	//     小时级, 而消费循环是同步的 —— 并进 FinanceQueue 会把那两条日结命令堵在队头,
 	//     同 LeadRakeQueue 的拆分理由;
-	//  2. 两者的失败模式也不同: 日结失败=今天的账没结 (要立刻知道), 补账失败=某段历史
-	//     没补齐 (可以慢慢重跑), 分开让重试计数与 DLQ 互不污染。
+	//  2. 它的失败模式 (银行侧 / SFTP / 凭据) 与那两条 (上游服务 / DB) 完全不同,
+	//     分开让重试计数与 DLQ 互不污染。
 	//
-	// 两条队列**消费的是同一把全局 Redis 锁** (finance-service 的
-	// finance:pingan:recon:sync_lock), 所以补账与日结之间仍然是串行的 —— 分队列解决的是
-	// 排队导致的假超时, 不是并发。
+	// 队名里的 backfill 是历史名字: 单日同步那条任务类型 (finance.pingan.recon.sync)
+	// 2026-10 退役后, 两种用法在同一条队列里 FIFO —— 长补账会把每天那次排到后面, 这是
+	// 退役时明确接受的代价 (没有凌晨排期, 撞上的概率可忽略)。它与 FinanceQueue 消费的
+	// 是 finance 侧**同一把全局 Redis 锁** (finance:pingan:recon:sync_lock), 所以分队列
+	// 解决的是排队导致的假超时, 不是并发。
 	FinanceReconBackfillQueue = "opengo.finance.recon.backfill.tasks"
 	// DashboardQueue 只承载数据来源渠道同步一条命令, 所以不另拆。
 	DashboardQueue = "opengo.dashboard.tasks"
@@ -97,16 +92,18 @@ const (
 
 	FinanceKeziRakeBillDailyGenerate = "finance.kezi_rake_bill.daily.generate"
 	FinanceYeepayFundBillSync        = "finance.yeepay.fundbill.sync"
-	// FinancePinganReconSync 的成败判定不看 Sync 返回的 error —— 六类全失败它也可能返回
-	// nil, 只有缺参数 / 未配置 / 已有一轮在跑三种情况才有 error。真正的结论逐类型算:
-	// no_file/skipped 是正常业务事实, failed/not_delivered/pending 才算没拿到结论。
-	// 判定实现在 finance-service 的 internal/pingan (状态词表的归属地)。
-	FinancePinganReconSync = "finance.pingan.recon.sync"
-	// FinancePinganReconBackfill 是同一个 sweep 的**多日**版本: 按天循环调用
-	// pingan.RunSweep, 每天独立 run_id、独立日志、单独拿锁放锁 (不跨天持锁 —— 锁 TTL
-	// 30 分钟, 长批次跨天持锁会在中途失效)。参数与 workorder.ai_analysis.batch 同形:
-	// days 与 start_time/end_time 互斥, 跨度上限 31 天; 差别是 days:N 以**昨天**为终点
-	// (银行当天不生成当天文件)。逐日容错、互不影响, 整轮成败 = 所有天都拿到结论。
+	// FinancePinganReconBackfill 按天循环调用平安对账的 sweep, 现在是平安对账**唯一**
+	// 的任务类型 (单日同步那条 finance.pingan.recon.sync 2026-10 退役: days=1 就是
+	// "每天跑昨天", 多日补账是同一类型的区间写法)。每天独立 run_id、独立日志、
+	// 单独拿锁放锁 (不跨天持锁 —— 锁 TTL 30 分钟, 长批次跨天持锁会在中途失效)。
+	// 参数与 workorder.ai_analysis.batch 同形: days 与 start_time/end_time 互斥,
+	// 跨度上限 31 天; 差别是 days:N 以**昨天**为终点 (银行当天不生成当天文件)。
+	// 逐日容错、互不影响, 整轮成败 = 所有天都拿到结论。
+	//
+	// 成败判定不看 sweep 返回的 error —— 六类全失败它也可能返回 nil, 只有缺参数 /
+	// 未配置 / 已有一轮在跑三种情况才有 error。真正的结论逐类型算: no_file/skipped 是
+	// 正常业务事实, failed/not_delivered/pending 才算没拿到结论。判定实现在
+	// finance-service 的 internal/pingan (状态词表的归属地)。
 	FinancePinganReconBackfill = "finance.pingan.recon.backfill"
 	DashboardSourceOptionSync  = "dashboard.source_option.sync"
 	// RunFinished 是唯一一条"回执"方向的消息: 其余 task type 都是 scheduler 发出的命令。
