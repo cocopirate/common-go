@@ -95,7 +95,9 @@ func Setup(serviceName, endpoint string, log *zap.Logger) (func(), *sdktrace.Tra
 	}
 
 	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exp),
+		// 出口兜底：清洗非法 UTF-8 —— proto3 的 string 字段会让**整批**导出失败
+		// （"traces export: string field contains invalid UTF-8"），见 sanitize.go。
+		sdktrace.WithBatcher(sanitizingExporter{inner: exp}),
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)

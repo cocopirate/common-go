@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/cocopirate/common-go/telemetry"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -22,6 +23,11 @@ import (
 //	http.path_param.<name>  — per path parameter (e.g. http.path_param.id)
 //	http.request.body       — request body (truncated, sensitive fields masked)
 //	http.response.body      — response body (truncated, sensitive fields masked)
+//
+// 所有取值都先过 telemetry.SanitizeUTF8：本中间件抓的正是最容易夹带非法 UTF-8
+// 的东西 —— 请求/响应体按字节截断时可能正好砍在多字节字符中间（4096 处切「中」
+// 这类 3 字节字符），旧客户端还会直接发 GBK 体、header 允许 obs-text 字节。一个
+// 坏字节会让整批 trace 导出失败（见 telemetry/sanitize.go），所以写入侧也清一遍。
 func Middleware(opts ...Option) gin.HandlerFunc {
 	cfg := defaultConfig()
 	for _, o := range opts {
@@ -45,29 +51,29 @@ func Middleware(opts ...Option) gin.HandlerFunc {
 
 		// ── Path params ───────────────────────────────────────────────
 		for _, p := range c.Params {
-			span.SetAttributes(attribute.String("http.path_param."+p.Key, p.Value))
+			span.SetAttributes(attribute.String("http.path_param."+p.Key, telemetry.SanitizeUTF8(p.Value)))
 		}
 
 		// ── URL ───────────────────────────────────────────────────────
 		span.SetAttributes(
-			attribute.String("http.target", c.Request.URL.RequestURI()),
-			attribute.String("http.url", c.Request.URL.String()),
+			attribute.String("http.target", telemetry.SanitizeUTF8(c.Request.URL.RequestURI())),
+			attribute.String("http.url", telemetry.SanitizeUTF8(c.Request.URL.String())),
 		)
 
 		// ── Client IP ─────────────────────────────────────────────────
 		if ip := c.ClientIP(); ip != "" {
-			span.SetAttributes(attribute.String("http.client_ip", ip))
+			span.SetAttributes(attribute.String("http.client_ip", telemetry.SanitizeUTF8(ip)))
 		}
 		if xff := c.GetHeader("X-Forwarded-For"); xff != "" {
-			span.SetAttributes(attribute.String("http.request.header.x_forwarded_for", xff))
+			span.SetAttributes(attribute.String("http.request.header.x_forwarded_for", telemetry.SanitizeUTF8(xff)))
 		}
 
 		// ── Common request headers ────────────────────────────────────
 		if ct := c.GetHeader("Content-Type"); ct != "" {
-			span.SetAttributes(attribute.String("http.request.header.content_type", ct))
+			span.SetAttributes(attribute.String("http.request.header.content_type", telemetry.SanitizeUTF8(ct)))
 		}
 		if cl := c.GetHeader("Content-Length"); cl != "" {
-			span.SetAttributes(attribute.String("http.request.header.content_length", cl))
+			span.SetAttributes(attribute.String("http.request.header.content_length", telemetry.SanitizeUTF8(cl)))
 		}
 
 		// ── Request body ──────────────────────────────────────────────
@@ -87,7 +93,7 @@ func Middleware(opts ...Option) gin.HandlerFunc {
 		}
 
 		if len(reqBody) > 0 {
-			span.SetAttributes(attribute.String("http.request.body", string(reqBody)))
+			span.SetAttributes(attribute.String("http.request.body", telemetry.SanitizeUTF8(string(reqBody))))
 		}
 
 		// ── Response body ─────────────────────────────────────────────
@@ -102,7 +108,7 @@ func Middleware(opts ...Option) gin.HandlerFunc {
 
 		// Record captured response body on the span
 		if len(rw.body) > 0 {
-			respStr := string(rw.body)
+			respStr := telemetry.SanitizeUTF8(string(rw.body))
 			span.SetAttributes(attribute.String("http.response.body", respStr))
 
 			// If the handler wrote an error status, mark the span
@@ -124,6 +130,8 @@ type responseWriter struct {
 
 func (w *responseWriter) Write(b []byte) (int, error) {
 	if len(w.body) < w.maxSize {
+		// 按字节截断，可能正好切在多字节字符中间 —— 属性落进 span 前会过
+		// telemetry.SanitizeUTF8，这里不用按 rune 边界重算。
 		remain := w.maxSize - len(w.body)
 		if len(b) > remain {
 			w.body = append(w.body, b[:remain]...)
