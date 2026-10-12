@@ -76,8 +76,6 @@ const (
 	// 是 finance 侧**同一把全局 Redis 锁** (finance:pingan:recon:sync_lock), 所以分队列
 	// 解决的是排队导致的假超时, 不是并发。
 	FinanceReconBackfillQueue = "opengo.finance.recon.backfill.tasks"
-	// DashboardQueue 只承载数据来源渠道同步一条命令, 所以不另拆。
-	DashboardQueue = "opengo.dashboard.tasks"
 	// 结果队列: 业务服务回报 → scheduler 消费, 方向与上面相反。正因为它反向,
 	// **发起 run 的业务服务也要在启动时 EnsureQueue 它**: exchange 上还没有绑定时,
 	// publisher confirm 依然 ACK, 消息会被静默丢弃 (见 Publisher.EnsureQueue)。
@@ -105,7 +103,6 @@ const (
 	// 正常业务事实, failed/not_delivered/pending 才算没拿到结论。判定实现在
 	// finance-service 的 internal/pingan (状态词表的归属地)。
 	FinancePinganReconBackfill = "finance.pingan.recon.backfill"
-	DashboardSourceOptionSync  = "dashboard.source_option.sync"
 	// RunFinished 是唯一一条"回执"方向的消息: 其余 task type 都是 scheduler 发出的命令。
 	RunFinished = "scheduler.run.finished"
 )
