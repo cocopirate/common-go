@@ -90,34 +90,20 @@ const (
 	// publisher confirm 依然 ACK, 消息会被静默丢弃 (见 Publisher.EnsureQueue)。
 	SchedulerQueue = "opengo.scheduler.tasks"
 
-	WorkorderAIAnalysisBatch      = "workorder.ai_analysis.batch"
-	LeadTextCallCheck             = "lead.text_parse.call_check"
-	LeadKeziRakeOrderSync         = "lead.kezi_rake_order.sync"
-	DownloadExportArtifactCleanup = "download.export_artifact.cleanup"
-	MerchantMarketDeclareSubmit   = "merchant.market_declare.submit"
-	MerchantStoreRevenueCompute   = "merchant.store_revenue.compute"
-
-	FinanceKeziRakeBillDailyGenerate = "finance.kezi_rake_bill.daily.generate"
-	FinanceYeepayFundBillSync        = "finance.yeepay.fundbill.sync"
-	// FinancePinganReconBackfill 按天循环调用平安对账的 sweep, 现在是平安对账**唯一**
-	// 的任务类型 (单日同步那条 finance.pingan.recon.sync 2026-10 退役: days=1 就是
-	// "每天跑昨天", 多日补账是同一类型的区间写法)。每天独立 run_id、独立日志、
-	// 单独拿锁放锁 (不跨天持锁 —— 锁 TTL 30 分钟, 长批次跨天持锁会在中途失效)。
-	// 参数与 workorder.ai_analysis.batch 同形: days 与 start_time/end_time 互斥,
-	// 跨度上限 31 天; 差别是 days:N 以**昨天**为终点 (银行当天不生成当天文件)。
-	// 逐日容错、互不影响, 整轮成败 = 所有天都拿到结论。
+	// **任务类型字面量不在这里**。它们一度是本包的一组常量, 但那让"给某个服务加一个定时
+	// 任务"变成一次 common-go 发版 + 全部消费方抬版本 —— 而 task type 是业务词汇, 不是
+	// 总线机制: 命名、参数、成败判定都只有拥有它的那个服务说了算 (2026-10 改)。
 	//
-	// 成败判定不看 sweep 返回的 error —— 六类全失败它也可能返回 nil, 只有缺参数 /
-	// 未配置 / 已有一轮在跑三种情况才有 error。真正的结论逐类型算: no_file/skipped 是
-	// 正常业务事实, failed/not_delivered/pending 才算没拿到结论。判定实现在
-	// finance-service 的 internal/pingan (状态词表的归属地)。
-	FinancePinganReconBackfill = "finance.pingan.recon.backfill"
-	// MetadataAmapRegionSync 全量同步高德行政区划 (省/市/区, 以及每个区的街道/乡镇)。
+	// 现在每个类型住在**消费它的服务**里 (声明在 handler 所在包, 名字统一 TaskType*),
+	// 调度侧 (scheduler-service 的 internal/task) 留一份副本 —— 它要在注册表与路由表里
+	// 引用这些值, 名字是调度侧的叫法, **值必须一致**。两份副本之间没有编译器, 由
+	// tools/routecheck 的 taskbus 检查比对:
+	// scheduler 路由表里的每个类型都要有且只有一个消费方, 消费方绑的队列也要与队列表一致。
 	//
-	// 无参数, 全有或全无: 全部抓取成功才一次性 upsert, 中途失败本轮什么都不写 (下次
-	// 全量重来)。它需要 AMAP_KEY —— 缺了会以 not_configured 失败, 这条失败的可见性正是
-	// 定时任务存在的意义 (在此之前只能人工带内网令牌手工 POST 一次才知道配没配)。
-	MetadataAmapRegionSync = "metadata.amap_region.sync"
+	// 本包只留**两端必须逐字一致、且与业务无关**的东西: exchange、队列名 (含 retry/dead
+	// 的派生规则)、回执类型 RunFinished、以及下面的信封与错误码。队列名留着是因为它是
+	// 拓扑: 两个方向都在声明它, 放在共享模块里改名是编译错误, 挪进服务就只剩工具在管。
+	//
 	// RunFinished 是唯一一条"回执"方向的消息: 其余 task type 都是 scheduler 发出的命令。
 	RunFinished = "scheduler.run.finished"
 )

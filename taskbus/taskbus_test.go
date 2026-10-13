@@ -8,7 +8,9 @@ import (
 
 func TestMessageRoundTrip(t *testing.T) {
 	scheduled := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
-	want := NewMessage(7, 9, WorkorderAIAnalysisBatch, json.RawMessage(`{"days":1}`), &scheduled)
+	// 任务类型字面量 2026-10 起归各业务服务所有 (见 taskbus.go 的常量区注释),
+	// 所以这里用一个合成值 —— 本测试只关心信封的编解码。
+	want := NewMessage(7, 9, "domain.object.action", json.RawMessage(`{"days":1}`), &scheduled)
 	raw, err := want.Marshal()
 	if err != nil {
 		t.Fatalf("Marshal error: %v", err)
