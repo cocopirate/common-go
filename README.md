@@ -20,7 +20,7 @@
 | `logx` | Zap 日志初始化和日志字段辅助方法。 |
 | `ossx` | 阿里云 OSS 签名 URL 与公共域名 URL 辅助方法。 |
 | `redisx` | Redis client 创建和配置辅助方法。 |
-| `taskbus` | RabbitMQ 任务总线契约：服务间只交换稳定的 JSON 命令，exchange 声明、publisher confirm、重试队列与死信路由都藏在包内。 |
+| `taskbus` | RabbitMQ 任务总线契约：服务间只交换稳定的 JSON 命令，exchange 声明、publisher confirm、重试队列与死信路由都藏在包内。**任务类型字面量（`<域>.<对象>.<动作>`）不在这里** —— 2026-10 起归消费它的服务所有（`internal/<域>/` 的 `TaskType*` 常量），本包只留队列名、信封和错误码；跨服务的两份副本由 `tools/routecheck` 的 taskbus 检查比对。 |
 | `telemetry` | Request ID、指标、OpenTelemetry 和 Gin span 支持。 |
 | `yop` | 易宝 YOP OpenAPI 客户端与 Yop-Auth-V2（RSA2048-SHA256）签名。 |
 
