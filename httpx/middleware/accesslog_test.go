@@ -132,7 +132,7 @@ func TestAccessLogSensitiveFieldsMasked(t *testing.T) {
 	os.Setenv("HTTP_LOG_BODY_SAMPLE_RATE", "1")
 	defer os.Unsetenv("HTTP_LOG_BODY_SAMPLE_RATE")
 	log, cap := newTestLogger()
-	doRequest(t, log, `{"username":"bob","password":"super-secret","mobile":"13800138000","verify_code":"123456"}`, nil)
+	doRequest(t, log, `{"username":"bob","password":"super-secret","mobile":"13800138000","verify_code":"123456","object_key":"proof/secret.png","transaction_no":"20261013123456","ocr_raw_result":"{\\"amount\\":100}","payer_name":"工程师","payee_name":"客户"}`, nil)
 	m := lastLogEntry(t, cap)
 	body, _ := m["req_body"].(string)
 	if strings.Contains(body, "super-secret") {
@@ -152,6 +152,11 @@ func TestAccessLogSensitiveFieldsMasked(t *testing.T) {
 	}
 	if !strings.Contains(body, `"verify_code":"***"`) {
 		t.Errorf("verify_code should be replaced with ***, got %q", body)
+	}
+	for _, value := range []string{"proof/secret.png", "20261013123456", "工程师", "客户", `\\"amount\\":100`} {
+		if strings.Contains(body, value) {
+			t.Errorf("new recycling sensitive value %q must be masked, got %q", value, body)
+		}
 	}
 }
 

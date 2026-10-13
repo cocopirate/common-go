@@ -23,6 +23,7 @@ func defaultConfig() *config {
 		"password", "passwd", "secret", "token", "access_token", "refresh_token",
 		"api_key", "apikey", "authorization", "sign", "signature", "key",
 		"old_password", "new_password", "credential", "otp", "verify_code", "mobile",
+		"object_key", "transaction_no", "payer_name", "payee_name", "ocr_raw_result",
 	} {
 		c.sensitiveFields[f] = struct{}{}
 	}

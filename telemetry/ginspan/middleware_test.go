@@ -187,6 +187,16 @@ func TestDefaultSensitiveFieldsMaskSmsBody(t *testing.T) {
 	}
 }
 
+func TestDefaultSensitiveFieldsMaskRecyclingPaymentBody(t *testing.T) {
+	re := sensitiveRegex(defaultConfig().sensitiveFields)
+	body := `{"object_key":"proof/secret.png","transaction_no":"20261013123456","payer_name":"工程师","payee_name":"客户","ocr_raw_result":"raw"}`
+	got := re.ReplaceAllString(body, `"$1":"***"`)
+	want := `{"object_key":"***","transaction_no":"***","payer_name":"***","payee_name":"***","ocr_raw_result":"***"}`
+	if got != want {
+		t.Fatalf("masked body = %s, want %s", got, want)
+	}
+}
+
 func recordingSpanMiddleware() gin.HandlerFunc {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
 	tracer := tp.Tracer("ginspan-test")
