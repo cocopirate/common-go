@@ -76,6 +76,15 @@ const (
 	// 是 finance 侧**同一把全局 Redis 锁** (finance:pingan:recon:sync_lock), 所以分队列
 	// 解决的是排队导致的假超时, 不是并发。
 	FinanceReconBackfillQueue = "opengo.finance.recon.backfill.tasks"
+	// MetadataQueue 只承载 metadata.amap_region.sync 这一个任务类型, 所以不另拆。
+	//
+	// 它是**每周一次**的全量抓取 (省/市/区 + 逐区拉街道, 约 2900 次串行 HTTP), 一次要跑
+	// 分钟级到十几分钟, 而消费循环是同步的 —— 但这条队列上没有并列的第二类命令, 拆分的
+	// 理由 (长跑堵住队头, 见 LeadRakeQueue) 在这里不存在。
+	//
+	// 结果落 common_administrative_regions, 是**唯一**一份行政区划数据: 没有它, 依赖
+	// 区划的地址选择器就是一张空表, 而高德的配额 (个人认证每月十几万次) 撑得住每周全量。
+	MetadataQueue = "opengo.metadata.tasks"
 	// 结果队列: 业务服务回报 → scheduler 消费, 方向与上面相反。正因为它反向,
 	// **发起 run 的业务服务也要在启动时 EnsureQueue 它**: exchange 上还没有绑定时,
 	// publisher confirm 依然 ACK, 消息会被静默丢弃 (见 Publisher.EnsureQueue)。
@@ -103,6 +112,12 @@ const (
 	// 正常业务事实, failed/not_delivered/pending 才算没拿到结论。判定实现在
 	// finance-service 的 internal/pingan (状态词表的归属地)。
 	FinancePinganReconBackfill = "finance.pingan.recon.backfill"
+	// MetadataAmapRegionSync 全量同步高德行政区划 (省/市/区, 以及每个区的街道/乡镇)。
+	//
+	// 无参数, 全有或全无: 全部抓取成功才一次性 upsert, 中途失败本轮什么都不写 (下次
+	// 全量重来)。它需要 AMAP_KEY —— 缺了会以 not_configured 失败, 这条失败的可见性正是
+	// 定时任务存在的意义 (在此之前只能人工带内网令牌手工 POST 一次才知道配没配)。
+	MetadataAmapRegionSync = "metadata.amap_region.sync"
 	// RunFinished 是唯一一条"回执"方向的消息: 其余 task type 都是 scheduler 发出的命令。
 	RunFinished = "scheduler.run.finished"
 )
