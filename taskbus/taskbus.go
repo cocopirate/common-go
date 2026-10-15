@@ -36,6 +36,17 @@ const (
 	//     全量翻页拉 legacy-bff 的长跑会把 call-check 的命令堵在队头;
 	//  2. 两类失败分开: rake 的失败风暴不会污染 call-check 的重试计数与 DLQ。
 	LeadRakeQueue = "opengo.lead.rake.tasks"
+	// LeadComplaintQueue 是 lead 这边的第三条队列, 理由与 LeadRakeQueue 同源:
+	//
+	//  1. 申诉同步是**无参数的全量翻页** (每页 200 行拉 legacy-bff), 分钟级长跑, 而消费
+	//     循环是同步的 —— 并进 LeadQueue 会把 call-check 的命令堵在队头, 并进
+	//     LeadRakeQueue 则让两条长跑互相排队 (两条都是小时级的定时命令, 撞上不是小概率);
+	//  2. 两类失败分开: 申诉同步拉的是旧 PHP 的申诉单, rake 拉的是旧库抽佣表, 上游不同、
+	//     排障路径不同, 分开让重试计数与 DLQ 各自成一条能读的线。
+	//
+	// 它与 rake 那条还有一个共同的边界: 数据只从旧系统流进来 (complaint_status=0 的申诉),
+	// 本服务对旧系统只读 —— 这条队列上永远只有 scheduler 发出的命令一条路。
+	LeadComplaintQueue = "opengo.lead.complaint.tasks"
 	// DownloadQueue 只承载 download.export_artifact.cleanup 这一个任务类型, 所以不另拆
 	// (lead 拆 rake 是因为 call-check 会被长跑堵住, 这里没有并列的第二类命令)。
 	//
