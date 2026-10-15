@@ -44,8 +44,10 @@ const (
 	//  2. 两类失败分开: 申诉同步拉的是旧 PHP 的申诉单, rake 拉的是旧库抽佣表, 上游不同、
 	//     排障路径不同, 分开让重试计数与 DLQ 各自成一条能读的线。
 	//
-	// 它与 rake 那条还有一个共同的边界: 数据只从旧系统流进来 (complaint_status=0 的申诉),
-	// 本服务对旧系统只读 —— 这条队列上永远只有 scheduler 发出的命令一条路。
+	// 它与 rake 那条曾经有一个共同的边界 (数据只从旧系统流进来、本服务对旧系统只读), 但
+	// 2026-10 之后这条队列不再只读: 批量同意/拒绝 (lead.complaint.batch_approve_invalid /
+	// batch_reject_invalid) 会经 legacy-bff 回写旧系统的 complaint_status —— 它们是**会写
+	// 旧系统**的命令, 排在队列里时寿命要算上排队时间。
 	LeadComplaintQueue = "opengo.lead.complaint.tasks"
 	// DownloadQueue 只承载 download.export_artifact.cleanup 这一个任务类型, 所以不另拆
 	// (lead 拆 rake 是因为 call-check 会被长跑堵住, 这里没有并列的第二类命令)。
