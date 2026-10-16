@@ -27,11 +27,18 @@ import (
 //
 // "otp" 是 verify_code 从前的名字，留着：common-go 是多项目共用的库，删掉会让
 // 别处仍在用这个名字的请求体失去脱敏；多一条不存在的名字没有代价。
+//
+// 平安会员那一组 (finance-service 的 /internal/pingan/members*)：6248 的**请求体**
+// 带三类证件号码与姓名，6098 的**响应体**带完整银行卡号与手机号。请求体 >=400 全量记、
+// <400 按采样率记，响应体同理 —— 不登记就是明文进日志。名字是那几个 DTO 的 json tag，
+// 改名要同批改这里。
 var accessLogSensitiveFields = []string{
 	"password", "passwd", "secret", "token", "access_token", "refresh_token",
 	"api_key", "apikey", "authorization", "sign", "signature", "key",
 	"old_password", "new_password", "credential", "otp", "verify_code", "mobile",
 	"object_key", "transaction_no", "payer_name", "payee_name", "ocr_raw_result",
+	"member_acct_no", "member_global_id", "company_global_id", "repr_global_id",
+	"member_name", "repr_name",
 }
 
 // AccessLog 统一访问日志中间件：记录请求基本信息，并按策略记录请求/响应 body。

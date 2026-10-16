@@ -19,11 +19,15 @@ func defaultConfig() *config {
 	// 验证码不叫 "code"：那是平台响应信封的业务码字段，登记进去会把每个响应的
 	// code 都打成 ***（详见 httpx 那份名单的注释）。"otp" 是它从前的名字，留着是
 	// 因为本库多项目共用。
+	// 末行那一组是平安会员接口（6248 请求带证件号码、6098 响应带完整卡号）——
+	// 名字是那几个 DTO 的 json tag，与 httpx 那份逐字相同。
 	for _, f := range []string{
 		"password", "passwd", "secret", "token", "access_token", "refresh_token",
 		"api_key", "apikey", "authorization", "sign", "signature", "key",
 		"old_password", "new_password", "credential", "otp", "verify_code", "mobile",
 		"object_key", "transaction_no", "payer_name", "payee_name", "ocr_raw_result",
+		"member_acct_no", "member_global_id", "company_global_id", "repr_global_id",
+		"member_name", "repr_name",
 	} {
 		c.sensitiveFields[f] = struct{}{}
 	}
