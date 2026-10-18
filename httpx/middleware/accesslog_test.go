@@ -132,7 +132,7 @@ func TestAccessLogSensitiveFieldsMasked(t *testing.T) {
 	os.Setenv("HTTP_LOG_BODY_SAMPLE_RATE", "1")
 	defer os.Unsetenv("HTTP_LOG_BODY_SAMPLE_RATE")
 	log, cap := newTestLogger()
-	doRequest(t, log, `{"username":"bob","password":"super-secret","mobile":"13800138000","verify_code":"123456","object_key":"proof/secret.png","transaction_no":"20261013123456","ocr_raw_result":"{\\"amount\\":100}","payer_name":"工程师","payee_name":"客户"}`, nil)
+	doRequest(t, log, `{"username":"bob","password":"super-secret","mobile":"13800138000","cellphone":"13900139000","verify_code":"123456","object_key":"proof/secret.png","transaction_no":"20261013123456","ocr_raw_result":"{\\"amount\\":100}","payer_name":"工程师","payee_name":"客户"}`, nil)
 	m := lastLogEntry(t, cap)
 	body, _ := m["req_body"].(string)
 	if strings.Contains(body, "super-secret") {
@@ -147,8 +147,8 @@ func TestAccessLogSensitiveFieldsMasked(t *testing.T) {
 	// The SMS chain carries a phone number in mobile and the code in
 	// verify_code; both appear in bodies this middleware records in full on a
 	// >=400 response.
-	if strings.Contains(body, "13800138000") || strings.Contains(body, "123456") {
-		t.Errorf("mobile and verify_code must be masked, got %q", body)
+	if strings.Contains(body, "13800138000") || strings.Contains(body, "13900139000") || strings.Contains(body, "123456") {
+		t.Errorf("mobile, cellphone and verify_code must be masked, got %q", body)
 	}
 	if !strings.Contains(body, `"verify_code":"***"`) {
 		t.Errorf("verify_code should be replaced with ***, got %q", body)

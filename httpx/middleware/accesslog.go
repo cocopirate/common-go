@@ -24,6 +24,8 @@ import (
 // "mobile" 是手机号：短信链路两端 (/api/v1/auth/sms-code 与 sms-service 的
 // POST /internal/v1/sms/messages) 都用这个名字传递号码，而 >=400 的请求体
 // 不采样全量记录 —— 不登记就是明文号码进日志。
+// "cellphone" 是订单域（order-service 的 /api/v1/orders/**）与旧工程师 App
+// 请求体里的手机号字段名，语义同 "mobile"：按 JSON key 精确匹配，两个名字都要在。
 //
 // "otp" 是 verify_code 从前的名字，留着：common-go 是多项目共用的库，删掉会让
 // 别处仍在用这个名字的请求体失去脱敏；多一条不存在的名字没有代价。
@@ -35,7 +37,7 @@ import (
 var accessLogSensitiveFields = []string{
 	"password", "passwd", "secret", "token", "access_token", "refresh_token",
 	"api_key", "apikey", "authorization", "sign", "signature", "key",
-	"old_password", "new_password", "credential", "otp", "verify_code", "mobile",
+	"old_password", "new_password", "credential", "otp", "verify_code", "mobile", "cellphone",
 	"object_key", "transaction_no", "payer_name", "payee_name", "ocr_raw_result",
 	"member_acct_no", "member_global_id", "company_global_id", "repr_global_id",
 	"member_name", "repr_name",

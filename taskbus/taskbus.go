@@ -89,6 +89,12 @@ const (
 	// 是 finance 侧**同一把全局 Redis 锁** (finance:pingan:recon:sync_lock), 所以分队列
 	// 解决的是排队导致的假超时, 不是并发。
 	FinanceReconBackfillQueue = "opengo.finance.recon.backfill.tasks"
+	// OrderQueue 承载旧订单域的同步命令 (当前只有 order.ruku_kezi_audit.sync)。
+	//
+	// 单独一条队列而不是与别的服务共用: 全量同步 (days=0) 要顺序扫旧库 5000 万行
+	// order 表, 是小时级长跑, 而消费循环是同步的 —— 与 LeadRakeQueue 的拆分理由
+	// 相同。同时它也把"旧 MySQL 慢/不可用"的失败与重试计数与其他服务隔开。
+	OrderQueue = "opengo.order.tasks"
 	// MetadataQueue 只承载 metadata.amap_region.sync 这一个任务类型, 所以不另拆。
 	//
 	// 它是**每周一次**的全量抓取 (省/市/区 + 逐区拉街道, 约 2900 次串行 HTTP), 一次要跑

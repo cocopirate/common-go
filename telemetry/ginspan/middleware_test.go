@@ -179,9 +179,9 @@ func TestMiddlewareSanitizesGBKRequestBody(t *testing.T) {
 // masking it would blank the code of every response.
 func TestDefaultSensitiveFieldsMaskSmsBody(t *testing.T) {
 	re := sensitiveRegex(defaultConfig().sensitiveFields)
-	body := `{"mobile":"13800138000","template_code":"ADMIN_LOGIN_CODE","params":{"verify_code":"123456"}}`
+	body := `{"mobile":"13800138000","cellphone":"13900139000","template_code":"ADMIN_LOGIN_CODE","params":{"verify_code":"123456"}}`
 	got := re.ReplaceAllString(body, `"$1":"***"`)
-	want := `{"mobile":"***","template_code":"ADMIN_LOGIN_CODE","params":{"verify_code":"***"}}`
+	want := `{"mobile":"***","cellphone":"***","template_code":"ADMIN_LOGIN_CODE","params":{"verify_code":"***"}}`
 	if got != want {
 		t.Fatalf("masked body = %s, want %s", got, want)
 	}
