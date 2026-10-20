@@ -25,7 +25,11 @@ func defaultConfig() *config {
 	for _, f := range []string{
 		"password", "passwd", "secret", "token", "access_token", "refresh_token",
 		"api_key", "apikey", "authorization", "sign", "signature", "key",
-		"old_password", "new_password", "credential", "otp", "verify_code", "mobile", "cellphone",
+		// 与 httpx/middleware 的 accessLogSensitiveFields 逐字一致：通知中心的
+		// webhook URL（含 access_token）与应用/邮件凭据。
+		"webhook_url", "webhook_secret", "app_secret", "corp_secret", "smtp_password",
+		"at_mobiles", "to", "user_ids",
+		"old_password", "new_password", "credential", "otp", "verify_code", "mobile", "cellphone", "phone", "email",
 		"object_key", "transaction_no", "payer_name", "payee_name", "ocr_raw_result",
 		"member_acct_no", "member_global_id", "company_global_id", "repr_global_id",
 		"member_name", "repr_name",

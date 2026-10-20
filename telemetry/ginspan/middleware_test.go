@@ -187,6 +187,16 @@ func TestDefaultSensitiveFieldsMaskSmsBody(t *testing.T) {
 	}
 }
 
+func TestDefaultSensitiveFieldsMaskNotificationRecipients(t *testing.T) {
+	re := sensitiveRegex(defaultConfig().sensitiveFields)
+	body := `{"at_mobiles":["13800138000"],"to":["ops@example.com"],"title":"告警"}`
+	got := re.ReplaceAllString(body, `"$1":"***"`)
+	want := `{"at_mobiles":"***","to":"***","title":"告警"}`
+	if got != want {
+		t.Fatalf("masked body = %s, want %s", got, want)
+	}
+}
+
 func TestDefaultSensitiveFieldsMaskRecyclingPaymentBody(t *testing.T) {
 	re := sensitiveRegex(defaultConfig().sensitiveFields)
 	body := `{"object_key":"proof/secret.png","transaction_no":"20261013123456","payer_name":"工程师","payee_name":"客户","ocr_raw_result":"raw"}`

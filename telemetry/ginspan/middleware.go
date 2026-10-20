@@ -174,6 +174,8 @@ func sensitiveRegex(fields map[string]struct{}) *regexp.Regexp {
 		buf.WriteString(regexp.QuoteMeta(f))
 		first = false
 	}
-	buf.WriteString(`)":\s*"[^"]*"`)
+	// 值可以是字符串，也可以是扁平数组（to / at_mobiles）；只匹配字符串会把
+	// 数组里的手机号、邮箱原样带进 span。
+	buf.WriteString(`)":\s*("(?:[^"\\]|\\.)*"|\[[^\]]*\])`)
 	return regexp.MustCompile(buf.String())
 }

@@ -37,7 +37,13 @@ import (
 var accessLogSensitiveFields = []string{
 	"password", "passwd", "secret", "token", "access_token", "refresh_token",
 	"api_key", "apikey", "authorization", "sign", "signature", "key",
-	"old_password", "new_password", "credential", "otp", "verify_code", "mobile", "cellphone",
+	// 通知中心（notification-service）账号凭据：webhook URL 里带 access_token，
+	// app_secret/corp_secret 是钉钉/企微/飞书应用凭据，smtp_password 是邮件密码。
+	// 与 telemetry/ginspan 的名单逐字保持一致。
+	"webhook_url", "webhook_secret", "app_secret", "corp_secret", "smtp_password",
+	// 收件人是数组（邮件 to、IM at_mobiles），正则同时匹配字符串和扁平数组。
+	"at_mobiles", "to", "user_ids",
+	"old_password", "new_password", "credential", "otp", "verify_code", "mobile", "cellphone", "phone", "email",
 	"object_key", "transaction_no", "payer_name", "payee_name", "ocr_raw_result",
 	"member_acct_no", "member_global_id", "company_global_id", "repr_global_id",
 	"member_name", "repr_name",
@@ -231,7 +237,9 @@ func sensitiveRegex(fields []string) *regexp.Regexp {
 		}
 		buf.WriteString(regexp.QuoteMeta(f))
 	}
-	buf.WriteString(`)":\s*"[^"]*"`)
+	// 值可以是字符串，也可以是扁平数组（to / at_mobiles）：只匹配字符串会让
+	// 数组里的手机号、邮箱原样进日志。
+	buf.WriteString(`)":\s*("(?:[^"\\]|\\.)*"|\[[^\]]*\])`)
 	return regexp.MustCompile(buf.String())
 }
 
