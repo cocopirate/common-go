@@ -47,6 +47,10 @@ var accessLogSensitiveFields = []string{
 	"object_key", "transaction_no", "payer_name", "payee_name", "ocr_raw_result",
 	"member_acct_no", "member_global_id", "company_global_id", "repr_global_id",
 	"member_name", "repr_name",
+	// 机型详情安全通道（catalog-service）：会话/请求信封字段。握手响应里的 key
+	// 已被上面的 "key" 覆盖；这里补上 mac_key 与会话标识，哪怕路径已被跳过日志，
+	// 也防止将来有人把密文信封放到别的 endpoint 上。
+	"mac_key", "sid", "nonce", "device_id", "customer_code", "channel_merchant_code",
 }
 
 // AccessLog 统一访问日志中间件：记录请求基本信息，并按策略记录请求/响应 body。

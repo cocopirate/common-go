@@ -33,6 +33,8 @@ func defaultConfig() *config {
 		"object_key", "transaction_no", "payer_name", "payee_name", "ocr_raw_result",
 		"member_acct_no", "member_global_id", "company_global_id", "repr_global_id",
 		"member_name", "repr_name",
+		// 与 httpx 名单同步：机型详情安全通道的会话/请求信封字段。
+		"mac_key", "sid", "nonce", "device_id", "customer_code", "channel_merchant_code",
 	} {
 		c.sensitiveFields[f] = struct{}{}
 	}
