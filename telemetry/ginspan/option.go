@@ -24,7 +24,7 @@ func defaultConfig() *config {
 	// 名字是那几个 DTO 的 json tag，与 httpx 那份逐字相同。
 	for _, f := range []string{
 		"password", "passwd", "secret", "token", "access_token", "refresh_token",
-		"api_key", "apikey", "authorization", "sign", "signature", "key",
+		"api_key", "apikey", "authorization", "sign", "signature", "key", "authcode", "qrinfo",
 		// 与 httpx/middleware 的 accessLogSensitiveFields 逐字一致：通知中心的
 		// webhook URL（含 access_token）与应用/邮件凭据。
 		"webhook_url", "webhook_secret", "app_secret", "corp_secret", "smtp_password",

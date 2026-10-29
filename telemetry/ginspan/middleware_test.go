@@ -207,6 +207,16 @@ func TestDefaultSensitiveFieldsMaskRecyclingPaymentBody(t *testing.T) {
 	}
 }
 
+func TestDefaultSensitiveFieldsMaskElectronicLicenseBody(t *testing.T) {
+	re := sensitiveRegex(defaultConfig().sensitiveFields)
+	body := `{"message_header":{"authcode":"provider-secret"},"message_content":{"qrinfo":"qr-code-content"}}`
+	got := re.ReplaceAllString(body, `"$1":"***"`)
+	want := `{"message_header":{"authcode":"***"},"message_content":{"qrinfo":"***"}}`
+	if got != want {
+		t.Fatalf("masked body = %s, want %s", got, want)
+	}
+}
+
 func recordingSpanMiddleware() gin.HandlerFunc {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
 	tracer := tp.Tracer("ginspan-test")

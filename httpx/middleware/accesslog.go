@@ -36,7 +36,7 @@ import (
 // 改名要同批改这里。
 var accessLogSensitiveFields = []string{
 	"password", "passwd", "secret", "token", "access_token", "refresh_token",
-	"api_key", "apikey", "authorization", "sign", "signature", "key",
+	"api_key", "apikey", "authorization", "sign", "signature", "key", "authcode", "qrinfo",
 	// 通知中心（notification-service）账号凭据：webhook URL 里带 access_token，
 	// app_secret/corp_secret 是钉钉/企微/飞书应用凭据，smtp_password 是邮件密码。
 	// 与 telemetry/ginspan 的名单逐字保持一致。
