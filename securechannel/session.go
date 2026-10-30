@@ -188,7 +188,9 @@ func newCore(opts Options, rdb *redis.Client, log *zap.Logger) *core {
 		log = zap.NewNop()
 	}
 	c := &core{opts: opts, rdb: rdb, log: log, now: time.Now, rand: rand.Reader}
-	if len(opts.Pepper) == 0 {
+	// 只有签发方会用 pepper 哈希 device/IP/UA；验签方不再需要 pepper，
+	// 空值不应在 catalog/merchant 启动时制造一条无意义的告警。
+	if len(opts.Pepper) == 0 && opts.SigningKey != nil {
 		if p, err := randomBytes(rand.Reader, 32); err == nil {
 			c.fallbackPepper = p
 		}
