@@ -55,11 +55,17 @@ func LoadPublicKeysFile(path string) (map[string]*ecdsa.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read old security public keys: %w", err)
 	}
-	keys, err := parseJWKS(raw)
+	keys, err := ParsePublicKeysJSON(raw)
 	if err != nil {
 		return nil, fmt.Errorf("parse old security public keys: %w", err)
 	}
 	return keys, nil
+}
+
+// ParsePublicKeysJSON 解析标准 JWKS JSON（{"keys":[{kty,crv,x,y,kid,...}]}）。
+// 网关的 SECURITY_JWT_OLD_PUBLIC_KEYS_B64 解码后就是这份 JSON。
+func ParsePublicKeysJSON(raw []byte) (map[string]*ecdsa.PublicKey, error) {
+	return parseJWKS(raw)
 }
 
 // PublicJWKS 返回签发方当前发布的公钥集合：当前签名 key + 轮换期旧 key。
