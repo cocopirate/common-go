@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -206,9 +207,18 @@ func TestTokenTampered(t *testing.T) {
 	if len(token) < 2 {
 		t.Fatal("short token")
 	}
-	bad := token[:len(token)-1] + "A"
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatal("malformed token")
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig[0] ^= 0xff
+	bad := parts[0] + "." + parts[1] + "." + base64.RawURLEncoding.EncodeToString(sig)
 	body := buildRequest(t, sess, e.now.Unix(), "nonce-bad-token", []byte(`{"id":1}`))
-	_, err := e.verifier.VerifyPayload(t.Context(), "POST", testPath, body, bad)
+	_, err = e.verifier.VerifyPayload(t.Context(), "POST", testPath, body, bad)
 	assertSecureCode(t, err, CodeTokenInvalid)
 }
 
