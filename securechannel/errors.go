@@ -14,6 +14,7 @@ const (
 	CodeTimestampSkew     = 40102
 	CodeNonceReplay       = 40103
 	CodeSignatureMismatch = 40104
+	CodeTokenInvalid      = 40105
 	CodeSessionQuota      = 42901
 	CodeHandshakeLimited  = 42902
 	CodeUnavailable       = 50301
@@ -58,6 +59,10 @@ func errNonceReplay() *Error {
 
 func errSignatureMismatch() *Error {
 	return newError(http.StatusUnauthorized, CodeSignatureMismatch, "signature mismatch", nil)
+}
+
+func errTokenInvalid(cause error) *Error {
+	return newError(http.StatusUnauthorized, CodeTokenInvalid, "token invalid", cause)
 }
 
 func errSessionQuota() *Error {

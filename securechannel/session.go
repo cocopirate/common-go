@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ecdsa"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -29,8 +30,18 @@ const (
 	// 覆盖；直接暴露给公网时该头不可信，所以部署上必须只允许经网关访问本服务。
 	HeaderClientIP = "X-Client-IP"
 
+	// HeaderAuthorization 携带 "Bearer <会话 JWT>"。会话 JWT 只放请求头：
+	// body 会被访问日志采样记录，而 header 不会；token 含会话 KEK，不能落日志。
+	// 公开安全路由在网关跳过 JWT 鉴权，所以 Authorization 在这里只表示会话凭证。
+	HeaderAuthorization = "Authorization"
+
 	AlgA256GCM    = "A256GCM"
 	SigHMACSHA256 = "HMAC-SHA256"
+	SigES256      = "ES256"
+
+	// ProtocolVersion 是当前信封/AAD/签名串的版本。v2 起请求必须携带
+	// Authorization: Bearer <token>；v1（无 token、主密钥包会话密钥）已删除。
+	ProtocolVersion = 2
 
 	sessionKeySuffix = "sess:"
 	deviceKeySuffix  = "dev:"
@@ -43,14 +54,33 @@ const (
 	hsRLKeySuffix    = "rl:hs:"
 )
 
+const (
+	DefaultJWTIssuer   = "opengo-gateway"
+	DefaultJWTAudience = "opengo-secure-channel"
+)
+
 var deviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{8,128}$`)
 
-// Options 是安全通道的全部可调参数。密钥和 TTL 都由部署配置注入，代码里没有
-// 可回落的默认主密钥 —— 缺密钥时服务必须启动失败，否则会话会退化成可预测的密钥。
+// Options 是安全通道的全部可调参数。签发方（Issuer）需要 SigningKey；验签方
+// （Verifier）需要 JWKSURL。没有任何“可回落的默认密钥”：缺签发/验签材料时
+// 构造函数直接失败，调用方把对应路由注册成 503，而不是静默降级。
 type Options struct {
-	MasterKey    []byte // 当前主密钥，32 字节
-	MasterKeyOld []byte // 轮换期内的旧主密钥，可为空
-	Pepper       []byte // 设备/IP/UA 哈希的 pepper；为空时由主密钥派生
+	// ── 签发方（gateway）──
+	SigningKey    *ecdsa.PrivateKey
+	SigningKeyID  string
+	OldPublicKeys map[string]*ecdsa.PublicKey // kid -> 旧公钥，轮换期保留
+
+	// ── 公共 JWT 参数 ──
+	JWTIssuer   string
+	JWTAudience string
+	JWTLeeway   time.Duration
+
+	// ── 验签方（catalog / merchant）──
+	JWKSURL         string
+	JWKSCacheTTL    time.Duration
+	JWKSHTTPTimeout time.Duration
+
+	Pepper []byte // 设备/IP/UA 哈希的 pepper；为空时进程内随机生成并 WARN
 
 	// KeyPrefix 是 Redis 键前缀。共用会话语义的服务必须用同一个前缀：网关签发、
 	// catalog/merchant 验会话，三处都配置成 sec:，因此会话可以跨服务复用。
@@ -82,6 +112,12 @@ type Options struct {
 
 func DefaultOptions() Options {
 	return Options{
+		JWTIssuer:                   DefaultJWTIssuer,
+		JWTAudience:                 DefaultJWTAudience,
+		SigningKeyID:                "gw-1",
+		JWTLeeway:                   30 * time.Second,
+		JWKSCacheTTL:                5 * time.Minute,
+		JWKSHTTPTimeout:             5 * time.Second,
 		KeyPrefix:                   "sec:",
 		SessionTTL:                  30 * time.Minute,
 		TimeWindow:                  120 * time.Second,
@@ -100,14 +136,7 @@ func DefaultOptions() Options {
 	}
 }
 
-// Validate 在启动期做硬校验，失败直接返回错误让 main 退出。
-func (o *Options) Validate() error {
-	if len(o.MasterKey) != 32 {
-		return fmt.Errorf("security master key must be 32 bytes, got %d", len(o.MasterKey))
-	}
-	if len(o.MasterKeyOld) != 0 && len(o.MasterKeyOld) != 32 {
-		return fmt.Errorf("security old master key must be 32 bytes, got %d", len(o.MasterKeyOld))
-	}
+func (o *Options) validateCommon() error {
 	if o.SessionTTL <= 0 || o.TimeWindow <= 0 {
 		return errors.New("security session ttl and time window must be positive")
 	}
@@ -126,25 +155,72 @@ func (o *Options) Validate() error {
 	if o.QuotaPrefix == "" {
 		o.QuotaPrefix = o.KeyPrefix
 	}
+	if o.JWTIssuer == "" {
+		o.JWTIssuer = DefaultJWTIssuer
+	}
+	if o.JWTAudience == "" {
+		o.JWTAudience = DefaultJWTAudience
+	}
+	if o.JWTLeeway <= 0 {
+		o.JWTLeeway = 30 * time.Second
+	}
+	if o.JWKSCacheTTL <= 0 {
+		o.JWKSCacheTTL = 5 * time.Minute
+	}
+	if o.JWKSHTTPTimeout <= 0 {
+		o.JWKSHTTPTimeout = 5 * time.Second
+	}
 	return nil
 }
 
-// key 把 Redis 键前缀与后缀拼起来；前缀由部署配置注入。共用会话的服务
-// （如 gateway 签发、catalog/merchant 验会话）必须使用同一个 KeyPrefix。
-func (v *Verifier) key(suffix string) string {
-	return v.opts.KeyPrefix + suffix
+// core 是 Issuer 与 Verifier 共用的状态：Redis、配置、时钟与随机源。
+type core struct {
+	opts           Options
+	rdb            *redis.Client
+	log            *zap.Logger
+	now            func() time.Time
+	rand           io.Reader
+	fallbackPepper []byte
 }
 
-// quotaKey 只用于单会话请求/RPS 计数；与 key 分开是为了让共享会话的服务
-// 各自执行自己的配额，而不是互相吃对方的计数。
-func (v *Verifier) quotaKey(suffix string) string {
-	return v.opts.QuotaPrefix + suffix
+func newCore(opts Options, rdb *redis.Client, log *zap.Logger) *core {
+	if log == nil {
+		log = zap.NewNop()
+	}
+	c := &core{opts: opts, rdb: rdb, log: log, now: time.Now, rand: rand.Reader}
+	if len(opts.Pepper) == 0 {
+		if p, err := randomBytes(rand.Reader, 32); err == nil {
+			c.fallbackPepper = p
+		}
+		log.Warn("SECURITY_PEPPER 未配置：使用进程内随机 pepper，设备/IP 哈希在进程重启后不可关联")
+	}
+	return c
 }
 
-// Session 是一次握手建立起来的会话。AESKey/MACKey 只在内存和请求处理期间存在。
+func (c *core) key(suffix string) string { return c.opts.KeyPrefix + suffix }
+
+func (c *core) quotaKey(suffix string) string { return c.opts.QuotaPrefix + suffix }
+
+func (c *core) pepper() []byte {
+	if len(c.opts.Pepper) > 0 {
+		return c.opts.Pepper
+	}
+	return c.fallbackPepper
+}
+
+func (c *core) hashValue(kind, value string) string {
+	h := sha256.New()
+	h.Write(c.pepper())
+	h.Write([]byte(kind))
+	h.Write([]byte{0})
+	h.Write([]byte(value))
+	return hex.EncodeToString(h.Sum(nil))[:32]
+}
+
+// Session 是一次握手建立起来的会话。AESKey/MACKey 只在下游验签期间存在；
+// Redis 里存的是用 JWT 中每会话 KEK 加密后的信封。
 type Session struct {
 	SID        string
-	KID        string
 	AESKey     []byte
 	MACKey     []byte
 	DeviceHash string
@@ -152,31 +228,31 @@ type Session struct {
 	UAHash     string
 	ExpiresAt  int64
 	CreatedAt  int64
+	WM         string // 响应水印，来自 JWT claim；只用于泄露溯源
 }
 
-// HandshakeRequest 是 POST /security/session 的请求体。这里没有任何密钥材料，
-// 密钥完全由服务端生成；TLS 负责传输保护。
 type HandshakeRequest struct {
 	DeviceID   string `json:"device_id"`
 	Client     string `json:"client"`
 	AppVersion string `json:"app_version"`
 }
 
-// HandshakeResult 是握手成功后下发给客户端的会话材料。
 type HandshakeResult struct {
 	SID       string `json:"sid"`
 	Key       string `json:"key"`
 	MACKey    string `json:"mac_key"`
+	Token     string `json:"token"`
 	ExpiresAt int64  `json:"expires_at"`
 	TTL       int64  `json:"ttl"`
+	V         int    `json:"v"`
 	Alg       string `json:"alg"`
 	SigAlg    string `json:"sig_alg"`
+	TokenAlg  string `json:"token_alg"`
 	ServerTS  int64  `json:"server_ts"`
 }
 
 type sessionRecord struct {
 	SID        string `json:"sid"`
-	KID        string `json:"kid"`
 	EncAESKey  string `json:"enc_ak"`
 	EncMACKey  string `json:"enc_mk"`
 	DeviceHash string `json:"dev"`
@@ -194,134 +270,200 @@ type auditRecord struct {
 	CreatedAt  int64  `json:"created"`
 }
 
-type masterKey struct {
-	KID string
-	Key []byte
+// Issuer 是网关侧的握手签发器。它持有 ES256 私钥，下游只拿公钥。
+type Issuer struct {
+	*core
+	signingKey    *ecdsa.PrivateKey
+	signingKID    string
+	oldPublicKeys map[string]*ecdsa.PublicKey
 }
 
-// Verifier 持有安全通道的配置与 Redis 会话存储。所有时间都通过 now 获取，
-// 便于测试固定时钟；生产路径不注入随机源以外的依赖。
-type Verifier struct {
-	opts Options
-	rdb  *redis.Client
-	log  *zap.Logger
-	now  func() time.Time
-	rand io.Reader
-}
-
-func New(opts Options, rdb *redis.Client, log *zap.Logger) (*Verifier, error) {
-	if err := opts.Validate(); err != nil {
+func NewIssuer(opts Options, rdb *redis.Client, log *zap.Logger) (*Issuer, error) {
+	if err := opts.validateCommon(); err != nil {
 		return nil, err
 	}
 	if rdb == nil {
 		return nil, errors.New("secure channel requires redis")
 	}
-	if log == nil {
-		log = zap.NewNop()
+	if opts.SigningKey == nil {
+		return nil, errors.New("secure channel issuer requires an ES256 signing key")
 	}
-	return &Verifier{
-		opts: opts,
-		rdb:  rdb,
-		log:  log,
-		now:  time.Now,
-		rand: rand.Reader,
+	if opts.SigningKey.Curve == nil || opts.SigningKey.Curve.Params().Name != "P-256" {
+		return nil, errors.New("security signing key must be ECDSA P-256")
+	}
+	if strings.TrimSpace(opts.SigningKeyID) == "" {
+		return nil, errors.New("security signing key id is required")
+	}
+	old := make(map[string]*ecdsa.PublicKey, len(opts.OldPublicKeys))
+	for kid, key := range opts.OldPublicKeys {
+		if kid == "" || key == nil || key.Curve == nil || key.Curve.Params().Name != "P-256" {
+			return nil, fmt.Errorf("invalid old security public key %q", kid)
+		}
+		if kid == opts.SigningKeyID {
+			continue
+		}
+		old[kid] = key
+	}
+	return &Issuer{
+		core:          newCore(opts, rdb, log),
+		signingKey:    opts.SigningKey,
+		signingKID:    opts.SigningKeyID,
+		oldPublicKeys: old,
 	}, nil
 }
 
-// Handshake 校验设备/IP 配额后签发一个随机会话。会话密钥用主密钥信封加密后
-// 落 Redis，Redis 快照本身不包含可直接使用的明文密钥。
-func (v *Verifier) Handshake(ctx context.Context, req HandshakeRequest, clientIP, userAgent string) (*HandshakeResult, error) {
+// Verifier 是下游服务侧的会话验签器。它只需要 JWKS（公钥），不持有任何
+// 可用于伪造会话的密钥。
+type Verifier struct {
+	*core
+	keys keySource
+}
+
+func NewVerifier(opts Options, rdb *redis.Client, log *zap.Logger) (*Verifier, error) {
+	if err := opts.validateCommon(); err != nil {
+		return nil, err
+	}
+	if rdb == nil {
+		return nil, errors.New("secure channel requires redis")
+	}
+	if strings.TrimSpace(opts.JWKSURL) == "" {
+		return nil, errors.New("secure channel verifier requires a JWKS URL")
+	}
+	return &Verifier{
+		core: newCore(opts, rdb, log),
+		keys: newRemoteKeySource(opts.JWKSURL, opts.JWKSCacheTTL, opts.JWKSHTTPTimeout),
+	}, nil
+}
+
+// NewVerifierWithPublicKeys 用静态公钥构造验签器，主要给测试和无法访问 JWKS
+// 的离线部署使用；生产默认走 JWKS，轮换不需要重启下游。
+func NewVerifierWithPublicKeys(opts Options, rdb *redis.Client, log *zap.Logger, keys map[string]*ecdsa.PublicKey) (*Verifier, error) {
+	if len(keys) == 0 {
+		return nil, errors.New("secure channel verifier requires at least one public key")
+	}
+	if err := opts.validateCommon(); err != nil {
+		return nil, err
+	}
+	if rdb == nil {
+		return nil, errors.New("secure channel requires redis")
+	}
+	return &Verifier{
+		core: newCore(opts, rdb, log),
+		keys: staticKeySource(keys),
+	}, nil
+}
+
+// Handshake 校验设备/IP 配额后签发一个随机会话：
+//   - AES/HMAC 会话密钥由服务端随机生成；
+//   - 用每会话随机 KEK 加密后写 Redis；
+//   - KEK 放进 ES256 签名的 JWT，下游用 JWKS 公钥验签后才能取到。
+func (i *Issuer) Handshake(ctx context.Context, req HandshakeRequest, clientIP, userAgent string) (*HandshakeResult, error) {
 	if !deviceIDPattern.MatchString(req.DeviceID) {
 		return nil, newError(http.StatusBadRequest, 40001, "invalid device_id", nil)
 	}
-	now := v.now()
+	now := i.now()
 	nowUnix := now.Unix()
-	devHash := v.hashValue("dev", req.DeviceID)
-	ipHash := v.hashValue("ip", normalizeIP(clientIP))
-	uaHash := v.hashValue("ua", userAgent)
+	devHash := i.hashValue("dev", req.DeviceID)
+	ipHash := i.hashValue("ip", normalizeIP(clientIP))
+	uaHash := i.hashValue("ua", userAgent)
 
-	// 握手限流：先卡 IP 再卡设备。两项都失败时返回同一个 42902，不向调用方
-	// 区分是哪一项命中。
-	if err := v.checkHandshakeLimits(ctx, ipHash, devHash, now); err != nil {
+	if err := i.checkHandshakeLimits(ctx, ipHash, devHash, now); err != nil {
 		return nil, err
 	}
-	if err := v.checkDeviceSessionCount(ctx, devHash, nowUnix); err != nil {
+	if err := i.checkDeviceSessionCount(ctx, devHash, nowUnix); err != nil {
 		return nil, err
 	}
 
-	sid, err := randomToken(v.rand, 16)
+	sid, err := randomToken(i.rand, 16)
 	if err != nil {
 		return nil, errUnavailable(err)
 	}
 	sid = "s_" + sid
-	aesKey, err := randomBytes(v.rand, 32)
+	aesKey, err := randomBytes(i.rand, 32)
 	if err != nil {
 		return nil, errUnavailable(err)
 	}
-	macKey, err := randomBytes(v.rand, 32)
+	macKey, err := randomBytes(i.rand, 32)
 	if err != nil {
 		return nil, errUnavailable(err)
 	}
-	kid, master := v.primaryMaster()
-	encAES, err := sealMaster(master, []byte("session|"+sid), aesKey)
+	kek, err := randomBytes(i.rand, 32)
 	if err != nil {
 		return nil, errUnavailable(err)
 	}
-	encMAC, err := sealMaster(master, []byte("session|"+sid), macKey)
+
+	aad := sessionAAD(sid)
+	encAES, err := sealWithKey(kek, aad, aesKey)
+	if err != nil {
+		return nil, errUnavailable(err)
+	}
+	encMAC, err := sealWithKey(kek, aad, macKey)
+	if err != nil {
+		return nil, errUnavailable(err)
+	}
+
+	expiresAt := now.Add(i.opts.SessionTTL).Unix()
+	wm := watermarkFor(i.pepper(), sid)
+	token, err := i.signToken(sid, base64.RawURLEncoding.EncodeToString(kek), wm, devHash, ipHash, uaHash, now, expiresAt)
 	if err != nil {
 		return nil, errUnavailable(err)
 	}
 
 	rec := sessionRecord{
 		SID:        sid,
-		KID:        kid,
 		EncAESKey:  encAES,
 		EncMACKey:  encMAC,
 		DeviceHash: devHash,
 		IPHash:     ipHash,
 		UAHash:     uaHash,
-		ExpiresAt:  now.Add(v.opts.SessionTTL).Unix(),
+		ExpiresAt:  expiresAt,
 		CreatedAt:  nowUnix,
 	}
 	blob, err := json.Marshal(rec)
 	if err != nil {
 		return nil, errUnavailable(err)
 	}
-	if err := v.rdb.Set(ctx, v.key(sessionKeySuffix+sid), blob, v.opts.SessionTTL).Err(); err != nil {
+	if err := i.rdb.Set(ctx, i.key(sessionKeySuffix+sid), blob, i.opts.SessionTTL).Err(); err != nil {
 		return nil, errUnavailable(err)
 	}
 
 	// 设备会话集合用于限制同一设备的并发会话数。用 ZSET 按过期时间排序，
 	// 每次握手顺手清理过期成员；它不承担鉴权，只做配额。
-	devKey := v.key(deviceKeySuffix + devHash)
-	_ = v.rdb.ZRemRangeByScore(ctx, devKey, "-inf", strconv.FormatInt(nowUnix, 10)).Err()
-	_ = v.rdb.ZAdd(ctx, devKey, redis.Z{Score: float64(rec.ExpiresAt), Member: sid}).Err()
-	_ = v.rdb.Expire(ctx, devKey, v.opts.SessionTTL+time.Hour).Err()
+	devKey := i.key(deviceKeySuffix + devHash)
+	_ = i.rdb.ZRemRangeByScore(ctx, devKey, "-inf", strconv.FormatInt(nowUnix, 10)).Err()
+	_ = i.rdb.ZAdd(ctx, devKey, redis.Z{Score: float64(expiresAt), Member: sid}).Err()
+	_ = i.rdb.Expire(ctx, devKey, i.opts.SessionTTL+time.Hour).Err()
 
 	// 审计记录只存哈希，保留 90 天，供泄露溯源；不存设备/IP 原文。
 	// 反向键把响应里的 _wm 映射回会话，否则水印只是好看但查不到人。
-	wm := watermarkFor(master, sid)
 	audit, _ := json.Marshal(auditRecord{DeviceHash: devHash, IPHash: ipHash, UAHash: uaHash, WM: wm, CreatedAt: nowUnix})
-	_ = v.rdb.Set(ctx, v.key(auditKeySuffix+hashShort(sid)), audit, 90*24*time.Hour).Err()
-	_ = v.rdb.Set(ctx, v.key(wmKeySuffix+wm), audit, 90*24*time.Hour).Err()
+	_ = i.rdb.Set(ctx, i.key(auditKeySuffix+hashShort(sid)), audit, 90*24*time.Hour).Err()
+	_ = i.rdb.Set(ctx, i.key(wmKeySuffix+wm), audit, 90*24*time.Hour).Err()
 
 	return &HandshakeResult{
 		SID:       sid,
 		Key:       base64.RawURLEncoding.EncodeToString(aesKey),
 		MACKey:    base64.RawURLEncoding.EncodeToString(macKey),
-		ExpiresAt: rec.ExpiresAt,
-		TTL:       int64(v.opts.SessionTTL.Seconds()),
+		Token:     token,
+		ExpiresAt: expiresAt,
+		TTL:       int64(i.opts.SessionTTL.Seconds()),
+		V:         ProtocolVersion,
 		Alg:       AlgA256GCM,
 		SigAlg:    SigHMACSHA256,
+		TokenAlg:  SigES256,
 		ServerTS:  nowUnix,
 	}, nil
 }
 
-// LoadSession 读取并解开一个会话。Redis 中不存在/已过期返回 40101；Redis 故障
-// 返回 50301 —— 后者不能伪装成会话失效，否则客户端会反复握手。
-func (v *Verifier) LoadSession(ctx context.Context, sid string) (*Session, error) {
+// LoadSession 读取并用 JWT 里的每会话 KEK 解开一个会话。Redis 中不存在/已过期
+// 返回 40101；Redis 故障返回 50301；KEK 不对返回 40105（只可能是 token 与 sid
+// 不匹配，属于客户端错误）。
+func (v *Verifier) LoadSession(ctx context.Context, sid string, kek []byte) (*Session, error) {
 	if sid == "" {
 		return nil, errSessionRequired()
+	}
+	if len(kek) != 32 {
+		return nil, errTokenInvalid(errors.New("missing session KEK"))
 	}
 	raw, err := v.rdb.Get(ctx, v.key(sessionKeySuffix+sid)).Bytes()
 	if errors.Is(err, redis.Nil) {
@@ -334,24 +476,23 @@ func (v *Verifier) LoadSession(ctx context.Context, sid string) (*Session, error
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		return nil, errSessionInvalid(err)
 	}
+	if rec.SID != sid {
+		return nil, errSessionInvalid(errors.New("session sid mismatch"))
+	}
 	if rec.ExpiresAt <= v.now().Unix() {
 		return nil, errSessionInvalid(nil)
 	}
-	master := v.masterFor(rec.KID)
-	if master == nil {
-		return nil, errSessionInvalid(fmt.Errorf("master key %q not configured", rec.KID))
-	}
-	aesKey, err := openMaster(master, []byte("session|"+rec.SID), rec.EncAESKey)
+	aad := sessionAAD(rec.SID)
+	aesKey, err := openWithKey(kek, aad, rec.EncAESKey)
 	if err != nil {
-		return nil, errSessionInvalid(err)
+		return nil, errTokenInvalid(err)
 	}
-	macKey, err := openMaster(master, []byte("session|"+rec.SID), rec.EncMACKey)
+	macKey, err := openWithKey(kek, aad, rec.EncMACKey)
 	if err != nil {
-		return nil, errSessionInvalid(err)
+		return nil, errTokenInvalid(err)
 	}
 	return &Session{
 		SID:        rec.SID,
-		KID:        rec.KID,
 		AESKey:     aesKey,
 		MACKey:     macKey,
 		DeviceHash: rec.DeviceHash,
@@ -362,36 +503,39 @@ func (v *Verifier) LoadSession(ctx context.Context, sid string) (*Session, error
 	}, nil
 }
 
-func (v *Verifier) Revoke(ctx context.Context, sid string) error {
-	raw, err := v.rdb.Get(ctx, v.key(sessionKeySuffix+sid)).Bytes()
+func (v *Verifier) Revoke(ctx context.Context, sid string) error { return v.core.revoke(ctx, sid) }
+
+func (i *Issuer) Revoke(ctx context.Context, sid string) error { return i.core.revoke(ctx, sid) }
+
+func (c *core) revoke(ctx context.Context, sid string) error {
+	raw, err := c.rdb.Get(ctx, c.key(sessionKeySuffix+sid)).Bytes()
 	if err == nil {
 		var rec sessionRecord
 		if json.Unmarshal(raw, &rec) == nil {
-			_ = v.rdb.ZRem(ctx, v.key(deviceKeySuffix+rec.DeviceHash), sid).Err()
+			_ = c.rdb.ZRem(ctx, c.key(deviceKeySuffix+rec.DeviceHash), sid).Err()
 		}
 	}
 	if err != nil && !errors.Is(err, redis.Nil) {
 		return err
 	}
-	return v.rdb.Del(ctx, v.key(sessionKeySuffix+sid)).Err()
+	return c.rdb.Del(ctx, c.key(sessionKeySuffix+sid)).Err()
 }
 
-// Watermark 返回写入内层 JSON 的会话水印。它只用于泄露溯源，不是鉴权字段。
+// Watermark 返回写入内层 JSON 的会话水印。v2 的水印来自网关签名的 token，
+// 下游只回显，不再用共享主密钥重新计算。
 func (v *Verifier) Watermark(sess *Session) string {
-	master := v.masterFor(sess.KID)
-	if master == nil {
-		master = v.opts.MasterKey
+	if sess == nil {
+		return ""
 	}
-	return watermarkFor(master, sess.SID)
+	return sess.WM
 }
 
-func watermarkFor(master []byte, sid string) string {
-	mac := hmac.New(sha256.New, master)
-	mac.Write([]byte("wm|" + sid))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)[:8])
+func watermarkFor(pepper []byte, sid string) string {
+	mac := hmacNew(pepper, "wm|"+sid)
+	return base64.RawURLEncoding.EncodeToString(mac[:8])
 }
 
-func (v *Verifier) checkHandshakeLimits(ctx context.Context, ipHash, devHash string, now time.Time) error {
+func (c *core) checkHandshakeLimits(ctx context.Context, ipHash, devHash string, now time.Time) error {
 	minuteBucket := now.Unix() / 60
 	hourBucket := now.Unix() / 3600
 	checks := []struct {
@@ -399,13 +543,13 @@ func (v *Verifier) checkHandshakeLimits(ctx context.Context, ipHash, devHash str
 		limit int64
 		ttl   time.Duration
 	}{
-		{fmt.Sprintf("%sip:m:%s:%d", v.key(hsRLKeySuffix), ipHash, minuteBucket), v.opts.HandshakePerIPPerMinute, 2 * time.Minute},
-		{fmt.Sprintf("%sip:h:%s:%d", v.key(hsRLKeySuffix), ipHash, hourBucket), v.opts.HandshakePerIPPerHour, 2 * time.Hour},
-		{fmt.Sprintf("%sdev:m:%s:%d", v.key(hsRLKeySuffix), devHash, minuteBucket), v.opts.HandshakePerDevicePerMinute, 2 * time.Minute},
-		{fmt.Sprintf("%sdev:h:%s:%d", v.key(hsRLKeySuffix), devHash, hourBucket), v.opts.HandshakePerDevicePerHour, 2 * time.Hour},
+		{fmt.Sprintf("%sip:m:%s:%d", c.key(hsRLKeySuffix), ipHash, minuteBucket), c.opts.HandshakePerIPPerMinute, 2 * time.Minute},
+		{fmt.Sprintf("%sip:h:%s:%d", c.key(hsRLKeySuffix), ipHash, hourBucket), c.opts.HandshakePerIPPerHour, 2 * time.Hour},
+		{fmt.Sprintf("%sdev:m:%s:%d", c.key(hsRLKeySuffix), devHash, minuteBucket), c.opts.HandshakePerDevicePerMinute, 2 * time.Minute},
+		{fmt.Sprintf("%sdev:h:%s:%d", c.key(hsRLKeySuffix), devHash, hourBucket), c.opts.HandshakePerDevicePerHour, 2 * time.Hour},
 	}
-	for _, c := range checks {
-		ok, err := v.allowFixedWindow(ctx, c.key, c.limit, c.ttl)
+	for _, ck := range checks {
+		ok, err := c.allowFixedWindow(ctx, ck.key, ck.limit, ck.ttl)
 		if err != nil {
 			return errUnavailable(err)
 		}
@@ -416,14 +560,14 @@ func (v *Verifier) checkHandshakeLimits(ctx context.Context, ipHash, devHash str
 	return nil
 }
 
-func (v *Verifier) checkDeviceSessionCount(ctx context.Context, devHash string, nowUnix int64) error {
-	devKey := v.key(deviceKeySuffix + devHash)
-	_ = v.rdb.ZRemRangeByScore(ctx, devKey, "-inf", strconv.FormatInt(nowUnix, 10)).Err()
-	n, err := v.rdb.ZCard(ctx, devKey).Result()
+func (c *core) checkDeviceSessionCount(ctx context.Context, devHash string, nowUnix int64) error {
+	devKey := c.key(deviceKeySuffix + devHash)
+	_ = c.rdb.ZRemRangeByScore(ctx, devKey, "-inf", strconv.FormatInt(nowUnix, 10)).Err()
+	n, err := c.rdb.ZCard(ctx, devKey).Result()
 	if err != nil {
 		return errUnavailable(err)
 	}
-	if n >= v.opts.MaxSessionsPerDevice {
+	if n >= c.opts.MaxSessionsPerDevice {
 		return errHandshakeLimited()
 	}
 	return nil
@@ -431,55 +575,21 @@ func (v *Verifier) checkDeviceSessionCount(ctx context.Context, devHash string, 
 
 // allowFixedWindow 是 Redis 固定窗口计数。key 已经包含窗口 bucket，所以只需
 // 在第一次 INCR 时设置 TTL；Redis 故障按 fail-closed 处理（调用方返回 503）。
-func (v *Verifier) allowFixedWindow(ctx context.Context, key string, limit int64, ttl time.Duration) (bool, error) {
-	n, err := v.rdb.Incr(ctx, key).Result()
+func (c *core) allowFixedWindow(ctx context.Context, key string, limit int64, ttl time.Duration) (bool, error) {
+	n, err := c.rdb.Incr(ctx, key).Result()
 	if err != nil {
 		return false, err
 	}
 	if n == 1 {
-		_ = v.rdb.Expire(ctx, key, ttl).Err()
+		_ = c.rdb.Expire(ctx, key, ttl).Err()
 	}
 	return n <= limit, nil
 }
 
-func (v *Verifier) pepper() []byte {
-	if len(v.opts.Pepper) > 0 {
-		return v.opts.Pepper
-	}
-	return v.opts.MasterKey
-}
+func sessionAAD(sid string) []byte { return []byte("session|v2|" + sid) }
 
-func (v *Verifier) hashValue(kind, value string) string {
-	h := sha256.New()
-	h.Write(v.pepper())
-	h.Write([]byte(kind))
-	h.Write([]byte{0})
-	h.Write([]byte(value))
-	return hex.EncodeToString(h.Sum(nil))[:32]
-}
-
-func (v *Verifier) primaryMaster() (string, []byte) {
-	kid := masterKID(v.opts.MasterKey)
-	return kid, v.opts.MasterKey
-}
-
-func (v *Verifier) masterFor(kid string) []byte {
-	if kid == "" || kid == masterKID(v.opts.MasterKey) {
-		return v.opts.MasterKey
-	}
-	if len(v.opts.MasterKeyOld) > 0 && kid == masterKID(v.opts.MasterKeyOld) {
-		return v.opts.MasterKeyOld
-	}
-	return nil
-}
-
-func masterKID(key []byte) string {
-	sum := sha256.Sum256(key)
-	return hex.EncodeToString(sum[:])[:8]
-}
-
-func sealMaster(master, aad, plain []byte) (string, error) {
-	block, err := aes.NewCipher(master)
+func sealWithKey(key, aad, plain []byte) (string, error) {
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
 	}
@@ -495,12 +605,12 @@ func sealMaster(master, aad, plain []byte) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(out), nil
 }
 
-func openMaster(master, aad []byte, encoded string) ([]byte, error) {
+func openWithKey(key, aad []byte, encoded string) ([]byte, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, err
 	}
-	block, err := aes.NewCipher(master)
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
@@ -534,6 +644,12 @@ func randomToken(r io.Reader, n int) (string, error) {
 func hashShort(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])[:16]
+}
+
+func hmacNew(key []byte, msg string) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(msg))
+	return mac.Sum(nil)
 }
 
 // ClientIP 优先取网关注入的 X-Client-IP，其次退回连接对端地址。直接暴露本服务

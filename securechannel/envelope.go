@@ -62,7 +62,7 @@ func (v *Verifier) EncryptResponse(sess *Session, path string, reqTS int64, reqN
 	if err != nil {
 		return nil, errUnavailable(err)
 	}
-	aad := fmt.Sprintf("v1|%s|%s|%d|%s|%d|%s|%s", sess.SID, path, reqTS, reqNonce, respTS, zipFlag, digest)
+	aad := fmt.Sprintf("v2|%s|%s|%d|%s|%d|%s|%s", sess.SID, path, reqTS, reqNonce, respTS, zipFlag, digest)
 	sealed := aead.Seal(nil, iv, payload, []byte(aad))
 	if len(sealed) < aead.Overhead() {
 		return nil, errUnavailable(errors.New("sealed response too short"))
@@ -71,7 +71,7 @@ func (v *Verifier) EncryptResponse(sess *Session, path string, reqTS int64, reqN
 	tag := sealed[len(sealed)-aead.Overhead():]
 
 	env := ResponseEnvelope{
-		V:   1,
+		V:   2,
 		SID: sess.SID,
 		TS:  respTS,
 		IV:  base64.RawURLEncoding.EncodeToString(iv),
@@ -114,7 +114,7 @@ func DecryptResponse(sess *Session, path string, reqTS int64, reqNonce string, r
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, err
 	}
-	if env.V != 1 || env.SID != sess.SID {
+	if env.V != 2 || env.SID != sess.SID {
 		return nil, errors.New("unexpected response envelope")
 	}
 	iv, err := base64.RawURLEncoding.DecodeString(env.IV)
@@ -137,7 +137,7 @@ func DecryptResponse(sess *Session, path string, reqTS int64, reqNonce string, r
 	if err != nil {
 		return nil, err
 	}
-	aad := fmt.Sprintf("v1|%s|%s|%d|%s|%d|%s|%s", env.SID, path, reqTS, reqNonce, env.TS, env.Zip, env.H)
+	aad := fmt.Sprintf("v2|%s|%s|%d|%s|%d|%s|%s", env.SID, path, reqTS, reqNonce, env.TS, env.Zip, env.H)
 	payload, err := aead.Open(nil, iv, append(append([]byte{}, ct...), tag...), []byte(aad))
 	if err != nil {
 		return nil, err

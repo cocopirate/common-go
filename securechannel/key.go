@@ -1,36 +1,87 @@
 package securechannel
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/x509"
 	"encoding/base64"
-	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
-	"strings"
+	"os"
 )
 
-// ParseKey 接受 32 字节原始值、64 位 hex、标准/URL base64（含无 padding 形式）。
-// 主密钥来自 Secret，格式由部署方决定；这里把常见写法都收敛成 []byte，避免
-// 因为 base64 带不带 padding 导致服务起不来。
-func ParseKey(raw string) ([]byte, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, errors.New("empty key")
+// LoadPrivateKeyFile 读取网关的 ES256 私钥。支持 PKCS#8 和 SEC1 两种 PEM；
+// 曲线必须是 P-256（ES256 不允许 P-384）。
+func LoadPrivateKeyFile(path string) (*ecdsa.PrivateKey, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read security signing key: %w", err)
 	}
-	if len(raw) == 64 {
-		if b, err := hex.DecodeString(raw); err == nil && len(b) == 32 {
-			return b, nil
+	return ParsePrivateKeyPEM(raw)
+}
+
+func ParsePrivateKeyPEM(raw []byte) (*ecdsa.PrivateKey, error) {
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil, errors.New("security signing key: no PEM block")
+	}
+	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		ec, ok := key.(*ecdsa.PrivateKey)
+		if !ok {
+			return nil, errors.New("security signing key: not an ECDSA key")
 		}
+		return checkECPrivateKey(ec)
 	}
-	for _, enc := range []*base64.Encoding{
-		base64.StdEncoding, base64.RawStdEncoding,
-		base64.URLEncoding, base64.RawURLEncoding,
-	} {
-		if b, err := enc.DecodeString(raw); err == nil && len(b) == 32 {
-			return b, nil
-		}
+	key, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("security signing key: %w", err)
 	}
-	if len(raw) == 32 {
-		return []byte(raw), nil
+	return checkECPrivateKey(key)
+}
+
+func checkECPrivateKey(key *ecdsa.PrivateKey) (*ecdsa.PrivateKey, error) {
+	if key == nil || key.Curve == nil || key.Curve.Params().Name != elliptic.P256().Params().Name {
+		return nil, errors.New("security signing key must use P-256")
 	}
-	return nil, fmt.Errorf("key must decode to 32 bytes, got %d raw chars", len(raw))
+	return key, nil
+}
+
+// LoadPublicKeysFile 读取一个 JWKS 文件（网关轮换期保留的旧公钥）。文件格式是
+// 标准 {"keys":[{"kty":"EC","crv":"P-256","kid":"...","x":"...","y":"..."}]}。
+func LoadPublicKeysFile(path string) (map[string]*ecdsa.PublicKey, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read old security public keys: %w", err)
+	}
+	keys, err := parseJWKS(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse old security public keys: %w", err)
+	}
+	return keys, nil
+}
+
+// PublicJWKS 返回签发方当前发布的公钥集合：当前签名 key + 轮换期旧 key。
+func (i *Issuer) PublicJWKS() map[string]any {
+	keys := make([]map[string]any, 0, 1+len(i.oldPublicKeys))
+	keys = append(keys, jwkDocument(i.signingKey.PublicKey, i.signingKID))
+	for kid, pub := range i.oldPublicKeys {
+		keys = append(keys, jwkDocument(*pub, kid))
+	}
+	return map[string]any{"keys": keys}
+}
+
+func (i *Issuer) JWKSJSON() ([]byte, error) { return json.Marshal(i.PublicJWKS()) }
+
+func jwkDocument(pub ecdsa.PublicKey, kid string) map[string]any {
+	return map[string]any{
+		"kty": "EC",
+		"crv": "P-256",
+		"use": "sig",
+		"alg": SigES256,
+		"kid": kid,
+		"x":   base64.RawURLEncoding.EncodeToString(pub.X.FillBytes(make([]byte, 32))),
+		"y":   base64.RawURLEncoding.EncodeToString(pub.Y.FillBytes(make([]byte, 32))),
+	}
 }
