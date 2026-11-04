@@ -95,6 +95,12 @@ const (
 	// order 表, 是小时级长跑, 而消费循环是同步的 —— 与 LeadRakeQueue 的拆分理由
 	// 相同。同时它也把"旧 MySQL 慢/不可用"的失败与重试计数与其他服务隔开。
 	OrderQueue = "opengo.order.tasks"
+	// VoiceQueue 承载 voice-service 的旧库通话记录同步 (voice.call_record.sync)。
+	//
+	// 首次回填要按主键扫旧库 1200 万行 vircall_record (每轮有预算、断点续传),
+	// 是小时级长跑; 消费循环是同步的, 与 OrderQueue 的拆分理由相同 —— 不能让它
+	// 堵住 voice 后续新增的其它命令, 也把"旧 MySQL 慢/不可用"的重试计数单独隔开。
+	VoiceQueue = "opengo.voice.tasks"
 	// MetadataQueue 只承载 metadata.amap_region.sync 这一个任务类型, 所以不另拆。
 	//
 	// 它是**每周一次**的全量抓取 (省/市/区 + 逐区拉街道, 约 2900 次串行 HTTP), 一次要跑

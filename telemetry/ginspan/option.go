@@ -35,6 +35,11 @@ func defaultConfig() *config {
 		"member_name", "repr_name",
 		// 与 httpx 名单同步：机型详情安全通道的会话/请求信封字段。
 		"mac_key", "sid", "nonce", "device_id", "customer_code", "channel_merchant_code",
+		// 虚拟号通话记录（voice-service）：接口响应里的主被叫真实号码、虚拟号与
+		// 对话文本；callerNum/calleeNum/bindNum/fwdDisplayNum 是华为回调的 JSON 键。
+		// 与 httpx/accesslog 的名单逐字一致。
+		"caller", "called", "callee", "caller_show", "called_show",
+		"callerNum", "calleeNum", "bindNum", "fwdDisplayNum", "sentence_text",
 	} {
 		c.sensitiveFields[f] = struct{}{}
 	}

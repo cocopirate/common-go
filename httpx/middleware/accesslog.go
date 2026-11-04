@@ -51,6 +51,11 @@ var accessLogSensitiveFields = []string{
 	// 已被上面的 "key" 覆盖；这里补上 mac_key 与会话标识，哪怕路径已被跳过日志，
 	// 也防止将来有人把密文信封放到别的 endpoint 上。
 	"mac_key", "sid", "nonce", "device_id", "customer_code", "channel_merchant_code",
+	// 虚拟号通话记录（voice-service）：接口响应里的主被叫真实号码、虚拟号与
+	// 对话文本；callerNum/calleeNum/bindNum/fwdDisplayNum 是华为回调的 JSON 键。
+	// 与 telemetry/ginspan 的默认名单逐字一致。
+	"caller", "called", "callee", "caller_show", "called_show",
+	"callerNum", "calleeNum", "bindNum", "fwdDisplayNum", "sentence_text",
 }
 
 // AccessLog 统一访问日志中间件：记录请求基本信息，并按策略记录请求/响应 body。
