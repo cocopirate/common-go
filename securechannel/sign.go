@@ -106,7 +106,7 @@ func (v *Verifier) VerifyPayload(ctx context.Context, method, path string, body 
 	if err != nil {
 		return nil, newError(http.StatusBadRequest, 40005, "decrypt failed", err)
 	}
-	if len(params) == 0 || len(params) > 16<<10 {
+	if len(params) == 0 || len(params) > v.opts.MaxParamsBytes {
 		return nil, newError(http.StatusBadRequest, 40006, "invalid params", nil)
 	}
 	return &RequestContext{

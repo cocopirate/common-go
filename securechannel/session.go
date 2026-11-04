@@ -93,6 +93,10 @@ type Options struct {
 	TimeWindow       time.Duration
 	MaxBodyBytes     int64
 	MaxResponseBytes int
+	// MaxParamsBytes 是解密后参数 JSON 的上限。catalog/merchant 的详情参数很小
+	// （默认 16 KiB 足够）；批量上报类接口（observability report）需要按请求体
+	// 实际大小单独放大，否则大批次会被当成 invalid params 整批丢弃。
+	MaxParamsBytes int
 
 	MaxRequestsPerSession   int64
 	RPSPerSession           int64
@@ -123,6 +127,7 @@ func DefaultOptions() Options {
 		TimeWindow:                  120 * time.Second,
 		MaxBodyBytes:                8 << 10,
 		MaxResponseBytes:            1 << 20,
+		MaxParamsBytes:              16 << 10,
 		MaxRequestsPerSession:       3000,
 		RPSPerSession:               20,
 		MaxSessionsPerDevice:        5,
@@ -142,6 +147,9 @@ func (o *Options) validateCommon() error {
 	}
 	if o.MaxBodyBytes <= 0 || o.MaxResponseBytes <= 0 {
 		return errors.New("security body limits must be positive")
+	}
+	if o.MaxParamsBytes <= 0 {
+		o.MaxParamsBytes = 16 << 10
 	}
 	if o.MaxRequestsPerSession <= 0 || o.RPSPerSession <= 0 || o.MaxSessionsPerDevice <= 0 {
 		return errors.New("security quotas must be positive")

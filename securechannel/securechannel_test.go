@@ -132,6 +132,35 @@ func TestHandshakeAndEncryptedRoundTrip(t *testing.T) {
 	}
 }
 
+// TestMaxParamsBytesIsConfigurable 锁住大批量上报的入口：默认 16 KiB 是给详情
+// 接口的，observability report 需要放大；上限必须真的生效，否则大批次会被
+// 40006 整批丢弃（而且客户端拿到的是业务错误，不是“参数太大”的明确信号）。
+func TestMaxParamsBytesIsConfigurable(t *testing.T) {
+	const limit = 48 << 10
+	e := newTestEnv(t, func(o *Options) {
+		o.MaxBodyBytes = 128 << 10
+		o.MaxParamsBytes = limit
+	})
+	sess, token := mustHandshake(t, e)
+
+	big := append([]byte(`{"msg":"`), bytes.Repeat([]byte("a"), 24<<10)...)
+	big = append(big, []byte(`"}`)...)
+	body := buildRequest(t, sess, e.now.Unix(), "nonce-big", big)
+	rc, err := e.verifier.VerifyPayload(t.Context(), "POST", testPath, body, token)
+	if err != nil {
+		t.Fatalf("VerifyPayload(big): %v", err)
+	}
+	if !bytes.Equal(rc.Params, big) {
+		t.Fatal("params mismatch")
+	}
+
+	tooBig := append([]byte(`{"msg":"`), bytes.Repeat([]byte("b"), limit)...)
+	tooBig = append(tooBig, []byte(`"}`)...)
+	body = buildRequest(t, sess, e.now.Unix(), "nonce-too-big", tooBig)
+	_, err = e.verifier.VerifyPayload(t.Context(), "POST", testPath, body, token)
+	assertSecureCode(t, err, 40006)
+}
+
 func TestReplayRejected(t *testing.T) {
 	e := newTestEnv(t, nil)
 	sess, token := mustHandshake(t, e)
