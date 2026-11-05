@@ -22,35 +22,30 @@ import (
 )
 
 const (
-	DefaultExchange      = "opengo.tasks"
-	DefaultRetryExchange = "opengo.tasks.retry"
+	DefaultExchange = "opengo.tasks"
+	// Retry 改为共享 exchange/queue（2026-11）。旧版本的 `opengo.tasks.retry`
+	// 与每条队列的 `<queue>.retry` 不再由新代码声明；升级并排空旧队列后删除。
+	DefaultRetryExchange = "opengo.tasks.retry.shared"
 	DefaultDeadExchange  = "opengo.tasks.dead"
+
+	// SharedRetryQueue / SharedDeadQueue 是整个环境共享的两条辅助队列。
+	// 共享 retry 队列的 x-message-ttl 来自各进程的 RetryDelay，所有服务必须配置
+	// 相同的 TASKBUS_RETRY_DELAY_SECONDS，否则 QueueDeclare 会 406。
+	SharedRetryQueue = "opengo.tasks.shared.retry"
+	SharedDeadQueue  = "opengo.tasks.shared.dead"
 
 	// 命令队列: scheduler 出站 (outbox) → 业务服务消费。
 	WorkorderQueue = "opengo.workorder.tasks"
 	LeadQueue      = "opengo.lead.tasks"
-	// LeadRakeQueue 单独一条队列, 而不是并进 LeadQueue:
+	// LeadLongQueue 收纳 lead 的长跑命令：抽佣同步 + 申诉同步/检测/批量处置。
+	// 它们与短命令（通话检测）分开，避免小时级任务堵住队头；长任务之间按 FIFO 串行，
+	// 这是用一条长队列换掉原来 rake/complaint 两条队列时接受的代价。
 	//
-	//  1. 同一个队列上的多个消费者是 **load-balance 而不是广播** —— 一条消息只投给其中
-	//     一个。而消费循环是同步的 (见 Consumer.handleDelivery), 所以 rake sync 那种
-	//     全量翻页拉 legacy-bff 的长跑会把 call-check 的命令堵在队头;
-	//  2. 两类失败分开: rake 的失败风暴不会污染 call-check 的重试计数与 DLQ。
-	LeadRakeQueue = "opengo.lead.rake.tasks"
-	// LeadComplaintQueue 是 lead 这边的第三条队列, 理由与 LeadRakeQueue 同源:
-	//
-	//  1. 申诉同步是**无参数的全量翻页** (每页 200 行拉 legacy-bff), 分钟级长跑, 而消费
-	//     循环是同步的 —— 并进 LeadQueue 会把 call-check 的命令堵在队头, 并进
-	//     LeadRakeQueue 则让两条长跑互相排队 (两条都是小时级的定时命令, 撞上不是小概率);
-	//  2. 两类失败分开: 申诉同步拉的是旧 PHP 的申诉单, rake 拉的是旧库抽佣表, 上游不同、
-	//     排障路径不同, 分开让重试计数与 DLQ 各自成一条能读的线。
-	//
-	// 它与 rake 那条曾经有一个共同的边界 (数据只从旧系统流进来、本服务对旧系统只读), 但
-	// 2026-10 之后这条队列不再只读: 批量同意/拒绝 (lead.complaint.batch_approve_invalid /
-	// batch_reject_invalid) 会经 legacy-bff 回写旧系统的 complaint_status —— 它们是**会写
-	// 旧系统**的命令, 排在队列里时寿命要算上排队时间。
-	LeadComplaintQueue = "opengo.lead.complaint.tasks"
+	// 批量同意/拒绝会经 legacy-bff 回写旧系统，排在长队列里时 timeout_seconds
+	// 必须把前面长任务的排队时间算进去。
+	LeadLongQueue = "opengo.lead.long.tasks"
 	// DownloadQueue 只承载 download.export_artifact.cleanup 这一个任务类型, 所以不另拆
-	// (lead 拆 rake 是因为 call-check 会被长跑堵住, 这里没有并列的第二类命令)。
+	// (lead 拆 long 是因为 call-check 会被长跑堵住, 这里没有并列的第二类命令)。
 	//
 	// 它清理的是**未脱敏**的导出产物 (CSV 里有姓名/手机号/地址), 而对象存储不会自己过期 ——
 	// 这条队列必须有人消费, 否则每次导出都在桶里留一份永久数据副本。
@@ -62,8 +57,8 @@ const (
 	//  2. 营收快照是申报报文里上月营收与额度标识的**唯一来源**, 所以营收必须跑在申报前。
 	//     同队列 FIFO 把这个数据依赖变成结构性保证, 而不是靠 crontab 的时间差。
 	//
-	// 与 LeadRakeQueue 的拆分理由 (长跑堵住并列命令) 不冲突: 那两个是并列的同类命令、其中
-	// 一个长跑会堵住另一个; 这里两者本就该一前一后, 串行是想要的语义而不是代价。
+	// 与 LeadLongQueue 的拆分理由 (长跑堵住并列命令) 不冲突: 这里两者本就该一前一后,
+	// 串行是想要的语义而不是代价。
 	MerchantQueue = "opengo.merchant.tasks"
 	// FinanceQueue 承载客资抽佣日账单与易宝资金账单两条日结命令, 不拆开:
 	//
@@ -73,26 +68,14 @@ const (
 	//     不同, 这里共享只是省一条队列, 代价是后到的那条要等前面跑完,
 	//     所以两条任务的 timeout_seconds 都要把排队时间算进去。
 	FinanceQueue = "opengo.finance.tasks"
-	// FinanceReconBackfillQueue 承载平安对账的**全部**命令 —— 每天跑昨天 (days=1) 与
-	// 多日补账是同一个任务类型的两种参数写法, 单独一条队列 (对比对象是 FinanceQueue):
-	//
-	//  1. 它是**分钟级串行 sweep** (六类逐类查文件 + SFTP 下载解密解压 + 逐行入库,
-	//     总预算 300 秒, 见 finance-service 的 pingan.SweepBudget), 一次最多 31 天时更是
-	//     小时级, 而消费循环是同步的 —— 并进 FinanceQueue 会把那两条日结命令堵在队头,
-	//     同 LeadRakeQueue 的拆分理由;
-	//  2. 它的失败模式 (银行侧 / SFTP / 凭据) 与那两条 (上游服务 / DB) 完全不同,
-	//     分开让重试计数与 DLQ 互不污染。
-	//
-	// 队名里的 backfill 是历史名字: 单日同步那条任务类型 (finance.pingan.recon.sync)
-	// 2026-10 退役后, 两种用法在同一条队列里 FIFO —— 长补账会把每天那次排到后面, 这是
-	// 退役时明确接受的代价 (没有凌晨排期, 撞上的概率可忽略)。它与 FinanceQueue 消费的
-	// 是 finance 侧**同一把全局 Redis 锁** (finance:pingan:recon:sync_lock), 所以分队列
-	// 解决的是排队导致的假超时, 不是并发。
-	FinanceReconBackfillQueue = "opengo.finance.recon.backfill.tasks"
+	// FinanceLongQueue 是 finance 的长任务队列（当前只有平安对账 sweep）。
+	// 与 FinanceQueue 分开：平安对账是分钟级串行 sweep，不能堵住两条日结命令；
+	// 多日补账是小时级，和每日那次在同一条长队列里 FIFO。
+	FinanceLongQueue = "opengo.finance.long.tasks"
 	// OrderQueue 承载旧订单域的同步命令 (当前只有 order.ruku_kezi_audit.sync)。
 	//
 	// 单独一条队列而不是与别的服务共用: 全量同步 (days=0) 要顺序扫旧库 5000 万行
-	// order 表, 是小时级长跑, 而消费循环是同步的 —— 与 LeadRakeQueue 的拆分理由
+	// order 表, 是小时级长跑, 而消费循环是同步的 —— 与 LeadLongQueue 的拆分理由
 	// 相同。同时它也把"旧 MySQL 慢/不可用"的失败与重试计数与其他服务隔开。
 	OrderQueue = "opengo.order.tasks"
 	// VoiceQueue 承载 voice-service 的旧库通话记录同步 (voice.call_record.sync)。
@@ -105,7 +88,7 @@ const (
 	//
 	// 它是**每周一次**的全量抓取 (省/市/区 + 逐区拉街道, 约 2900 次串行 HTTP), 一次要跑
 	// 分钟级到十几分钟, 而消费循环是同步的 —— 但这条队列上没有并列的第二类命令, 拆分的
-	// 理由 (长跑堵住队头, 见 LeadRakeQueue) 在这里不存在。
+	// 理由 (长跑堵住队头, 见 LeadLongQueue) 在这里不存在。
 	//
 	// 结果落 common_administrative_regions, 是**唯一**一份行政区划数据: 没有它, 依赖
 	// 区划的地址选择器就是一张空表, 而高德的配额 (个人认证每月十几万次) 撑得住每周全量。
@@ -233,6 +216,9 @@ type Config struct {
 	MaxAttempts    int
 	Prefetch       int
 	ConfirmTimeout time.Duration
+	// SharedQueuePrefix 可选：给共享 retry/dead 队列名加前缀。生产留空；
+	// 集成测试用唯一前缀，避免和正在运行的服务共用 TTL/队列声明。
+	SharedQueuePrefix string
 }
 
 func (c Config) normalized() Config {
@@ -258,6 +244,13 @@ func (c Config) normalized() Config {
 		c.ConfirmTimeout = 5 * time.Second
 	}
 	return c
+}
+
+func (c Config) sharedQueueNames() (retry, dead string) {
+	if prefix := strings.TrimSpace(c.SharedQueuePrefix); prefix != "" {
+		return prefix + ".retry", prefix + ".dead"
+	}
+	return SharedRetryQueue, SharedDeadQueue
 }
 
 // Publisher uses one AMQP channel at a time. amqp channels are not safe for
@@ -333,10 +326,13 @@ func (p *Publisher) PublishRunResult(ctx context.Context, runID, taskID int64, r
 	return p.Publish(ctx, RunFinished, msg)
 }
 
-// EnsureQueue declares the durable queue and its retry/dead-letter topology
-// before a publisher starts draining an outbox. Without this startup step, a
-// broker can confirm a message published to an exchange that has no consumer
+// EnsureQueue declares the durable queue and binds the shared retry/dead-letter
+// topology before a publisher starts draining an outbox. Without this startup step,
+// a broker can confirm a message published to an exchange that has no consumer
 // binding yet, which would silently drop the message.
+//
+// 2026-11 起不再为每条队列声明 `<queue>.retry` / `<queue>.dead`；所有队列共用
+// SharedRetryQueue / SharedDeadQueue。旧队列在全部服务升级后需要排空并删除。
 func (p *Publisher) EnsureQueue(queue string, routingKeys []string) error {
 	if strings.TrimSpace(queue) == "" {
 		return errors.New("rabbitmq queue is required")
@@ -420,8 +416,10 @@ func (p *Publisher) resetLocked() {
 
 // Consumer reconnects after a broker or channel failure. A successful
 // handler ack removes the command; failed commands are republished to the
-// TTL retry queue with an incremented attempt, and only the final failure is
-// rejected into the queue's dead-letter queue.
+// shared TTL retry queue with an incremented attempt, and only the final
+// failure is rejected into the shared dead-letter queue. Both auxiliary
+// queues are shared by every task queue in the environment (2026-11) so
+// queue occupancy does not grow by two queues per task type.
 type Consumer struct {
 	cfg Config
 	log *zap.Logger
@@ -555,6 +553,17 @@ func declareTopology(ch *amqp.Channel, cfg Config, spec *queueSpec) error {
 	if spec == nil {
 		return nil
 	}
+	retryQueue, deadQueue := cfg.sharedQueueNames()
+
+	// 共享 dead 队列：每条主队列的 DLX 仍指向 cfg.DeadExchange，用 queue 名做
+	// 路由键；这里只绑一次共享队列，不再为每条主队列声明 `<queue>.dead`。
+	if _, err := ch.QueueDeclare(deadQueue, true, false, false, false, nil); err != nil {
+		return fmt.Errorf("declare shared dead-letter queue %s: %w", deadQueue, err)
+	}
+	if err := ch.QueueBind(deadQueue, spec.queue, cfg.DeadExchange, false, nil); err != nil {
+		return fmt.Errorf("bind shared dead-letter queue %s: %w", deadQueue, err)
+	}
+
 	mainArgs := amqp.Table{
 		"x-dead-letter-exchange":    cfg.DeadExchange,
 		"x-dead-letter-routing-key": spec.queue,
@@ -562,20 +571,16 @@ func declareTopology(ch *amqp.Channel, cfg Config, spec *queueSpec) error {
 	if _, err := ch.QueueDeclare(spec.queue, true, false, false, false, mainArgs); err != nil {
 		return fmt.Errorf("declare task queue %s: %w", spec.queue, err)
 	}
-	deadQueue := spec.queue + ".dead"
-	if _, err := ch.QueueDeclare(deadQueue, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("declare dead-letter queue %s: %w", deadQueue, err)
-	}
-	if err := ch.QueueBind(deadQueue, spec.queue, cfg.DeadExchange, false, nil); err != nil {
-		return fmt.Errorf("bind dead-letter queue %s: %w", deadQueue, err)
-	}
-	retryQueue := spec.queue + ".retry"
+
+	// 共享 retry 队列：所有长/短任务共用同一 TTL。消息过期后按原 routing key
+	// 回到主 exchange，由对应的主队列消费。所有服务的 RetryDelay 必须一致，
+	// 否则同一个队列的 x-message-ttl 声明冲突（406）。
 	retryArgs := amqp.Table{
 		"x-message-ttl":          int32(cfg.RetryDelay.Milliseconds()),
 		"x-dead-letter-exchange": cfg.Exchange,
 	}
 	if _, err := ch.QueueDeclare(retryQueue, true, false, false, false, retryArgs); err != nil {
-		return fmt.Errorf("declare retry queue %s: %w", retryQueue, err)
+		return fmt.Errorf("declare shared retry queue %s: %w", retryQueue, err)
 	}
 	for _, key := range spec.routingKeys {
 		if strings.TrimSpace(key) == "" {
@@ -585,7 +590,7 @@ func declareTopology(ch *amqp.Channel, cfg Config, spec *queueSpec) error {
 			return fmt.Errorf("bind task queue %s with %s: %w", spec.queue, key, err)
 		}
 		if err := ch.QueueBind(retryQueue, key, cfg.RetryExchange, false, nil); err != nil {
-			return fmt.Errorf("bind retry queue %s with %s: %w", retryQueue, key, err)
+			return fmt.Errorf("bind shared retry queue %s with %s: %w", retryQueue, key, err)
 		}
 	}
 	return nil

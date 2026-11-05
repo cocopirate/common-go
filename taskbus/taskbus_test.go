@@ -99,3 +99,17 @@ func TestConfigDefaults(t *testing.T) {
 		t.Fatalf("runtime defaults = %+v", cfg)
 	}
 }
+
+func TestSharedQueueNames(t *testing.T) {
+	cfg := (Config{}).normalized()
+	retry, dead := cfg.sharedQueueNames()
+	if retry != SharedRetryQueue || dead != SharedDeadQueue {
+		t.Fatalf("shared queues = %q/%q, want %q/%q", retry, dead, SharedRetryQueue, SharedDeadQueue)
+	}
+
+	cfg.SharedQueuePrefix = "test.prefix"
+	retry, dead = cfg.sharedQueueNames()
+	if retry != "test.prefix.retry" || dead != "test.prefix.dead" {
+		t.Fatalf("prefixed shared queues = %q/%q", retry, dead)
+	}
+}

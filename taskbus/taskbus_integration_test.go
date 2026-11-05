@@ -22,7 +22,11 @@ func TestRabbitMQRoundTrip(t *testing.T) {
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
 	queue := "opengo.taskbus.test." + suffix
 	routingKey := "taskbus.test." + suffix
-	cfg := Config{URL: url, RetryDelay: 100 * time.Millisecond}
+	cfg := Config{
+		URL:               url,
+		RetryDelay:        100 * time.Millisecond,
+		SharedQueuePrefix: "opengo.taskbus.test." + suffix,
+	}
 
 	consumer, err := NewConsumer(cfg, zap.NewNop())
 	if err != nil {
@@ -106,7 +110,7 @@ func TestRabbitMQRoundTrip(t *testing.T) {
 		t.Fatal("consumer did not stop after cancellation")
 	}
 
-	deleteTestQueues(t, url, queue)
+	deleteTestQueues(t, url, queue, cfg.SharedQueuePrefix)
 }
 
 func waitForQueue(url, queue string, timeout time.Duration) bool {
@@ -129,7 +133,7 @@ func waitForQueue(url, queue string, timeout time.Duration) bool {
 	return false
 }
 
-func deleteTestQueues(t *testing.T, url, queue string) {
+func deleteTestQueues(t *testing.T, url, queue, sharedPrefix string) {
 	t.Helper()
 	conn, err := amqp.Dial(url)
 	if err != nil {
@@ -143,7 +147,8 @@ func deleteTestQueues(t *testing.T, url, queue string) {
 		return
 	}
 	defer ch.Close()
-	for _, name := range []string{queue, queue + ".retry", queue + ".dead"} {
+	retryQueue, deadQueue := sharedPrefix+".retry", sharedPrefix+".dead"
+	for _, name := range []string{queue, retryQueue, deadQueue} {
 		if _, err := ch.QueueDelete(name, false, false, false); err != nil {
 			t.Logf("delete queue %s: %v", name, err)
 		}
