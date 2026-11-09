@@ -44,6 +44,9 @@ var accessLogSensitiveFields = []string{
 	// 收件人是数组（邮件 to、IM at_mobiles），正则同时匹配字符串和扁平数组。
 	"at_mobiles", "to", "user_ids",
 	"old_password", "new_password", "credential", "otp", "verify_code", "mobile", "cellphone", "phone", "email",
+	// 通用 SSO（auth-service /api/v1/auth/sso/tickets）：一次性 ticket 就是登录凭据，
+	// 换取目标站 session 前有效。与 telemetry/ginspan 的名单逐字一致。
+	"ticket",
 	"object_key", "transaction_no", "payer_name", "payee_name", "ocr_raw_result",
 	"member_acct_no", "member_global_id", "company_global_id", "repr_global_id",
 	"member_name", "repr_name",

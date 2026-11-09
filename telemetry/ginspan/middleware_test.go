@@ -217,6 +217,16 @@ func TestDefaultSensitiveFieldsMaskElectronicLicenseBody(t *testing.T) {
 	}
 }
 
+func TestDefaultSensitiveFieldsMaskSsoTicket(t *testing.T) {
+	re := sensitiveRegex(defaultConfig().sensitiveFields)
+	body := `{"target":"docs","ticket":"sso-ticket-secret"}`
+	got := re.ReplaceAllString(body, `"$1":"***"`)
+	want := `{"target":"docs","ticket":"***"}`
+	if got != want {
+		t.Fatalf("masked body = %s, want %s", got, want)
+	}
+}
+
 func recordingSpanMiddleware() gin.HandlerFunc {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
 	tracer := tp.Tracer("ginspan-test")

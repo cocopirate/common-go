@@ -132,7 +132,7 @@ func TestAccessLogSensitiveFieldsMasked(t *testing.T) {
 	os.Setenv("HTTP_LOG_BODY_SAMPLE_RATE", "1")
 	defer os.Unsetenv("HTTP_LOG_BODY_SAMPLE_RATE")
 	log, cap := newTestLogger()
-	doRequest(t, log, `{"username":"bob","password":"super-secret","authcode":"provider-secret","qrinfo":"qr-code-content","mobile":"13800138000","cellphone":"13900139000","verify_code":"123456","object_key":"proof/secret.png","transaction_no":"20261013123456","ocr_raw_result":"{\\"amount\\":100}","payer_name":"工程师","payee_name":"客户","at_mobiles":["13800138000"],"to":["ops@example.com"]}`, nil)
+	doRequest(t, log, `{"username":"bob","password":"super-secret","authcode":"provider-secret","qrinfo":"qr-code-content","mobile":"13800138000","cellphone":"13900139000","verify_code":"123456","ticket":"sso-ticket-secret","object_key":"proof/secret.png","transaction_no":"20261013123456","ocr_raw_result":"{\\"amount\\":100}","payer_name":"工程师","payee_name":"客户","at_mobiles":["13800138000"],"to":["ops@example.com"]}`, nil)
 	m := lastLogEntry(t, cap)
 	body, _ := m["req_body"].(string)
 	if strings.Contains(body, "super-secret") {
@@ -156,6 +156,9 @@ func TestAccessLogSensitiveFieldsMasked(t *testing.T) {
 	}
 	if !strings.Contains(body, `"verify_code":"***"`) {
 		t.Errorf("verify_code should be replaced with ***, got %q", body)
+	}
+	if strings.Contains(body, "sso-ticket-secret") || !strings.Contains(body, `"ticket":"***"`) {
+		t.Errorf("SSO ticket must be masked, got %q", body)
 	}
 	// Recipients are arrays on the notification API; the masker has to cover
 	// array values too, not just strings.

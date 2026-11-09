@@ -30,6 +30,8 @@ func defaultConfig() *config {
 		"webhook_url", "webhook_secret", "app_secret", "corp_secret", "smtp_password",
 		"at_mobiles", "to", "user_ids",
 		"old_password", "new_password", "credential", "otp", "verify_code", "mobile", "cellphone", "phone", "email",
+		// 与 httpx 名单同步：通用 SSO 的一次性 ticket。
+		"ticket",
 		"object_key", "transaction_no", "payer_name", "payee_name", "ocr_raw_result",
 		"member_acct_no", "member_global_id", "company_global_id", "repr_global_id",
 		"member_name", "repr_name",
