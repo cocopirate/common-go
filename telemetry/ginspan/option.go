@@ -30,6 +30,8 @@ func defaultConfig() *config {
 		"webhook_url", "webhook_secret", "app_secret", "corp_secret", "smtp_password",
 		"at_mobiles", "to", "user_ids",
 		"old_password", "new_password", "credential", "otp", "verify_code", "mobile", "cellphone", "phone", "email",
+		// 与 httpx 同步：短信模板试发的模板参数值（扁平数组，整段掩掉）。
+		"template_params",
 		// 与 httpx 名单同步：通用 SSO 的一次性 ticket。
 		"ticket",
 		"object_key", "transaction_no", "payer_name", "payee_name", "ocr_raw_result",

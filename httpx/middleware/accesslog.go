@@ -44,6 +44,10 @@ var accessLogSensitiveFields = []string{
 	// 收件人是数组（邮件 to、IM at_mobiles），正则同时匹配字符串和扁平数组。
 	"at_mobiles", "to", "user_ids",
 	"old_password", "new_password", "credential", "otp", "verify_code", "mobile", "cellphone", "phone", "email",
+	// 短信模板试发（sms-service POST /api/v1/sms/test-send）的模板参数值。字段是
+	// 扁平数组（与 param_names 按下标对齐），所以正则能整段掩掉；对象形状的
+	// 参数不会被掩（正则只认字符串与扁平数组），新增此类字段前先确认形状。
+	"template_params",
 	// 通用 SSO（auth-service /api/v1/auth/sso/tickets）：一次性 ticket 就是登录凭据，
 	// 换取目标站 session 前有效。与 telemetry/ginspan 的名单逐字一致。
 	"ticket",
