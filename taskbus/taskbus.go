@@ -128,6 +128,14 @@ type Message struct {
 	Attempt     int             `json:"attempt"`
 	ScheduledAt *time.Time      `json:"scheduled_at,omitempty"`
 	TraceID     string          `json:"trace_id,omitempty"`
+	// Deadline 是这一轮 run 的绝对截止时间 (scheduler 用 started_at + timeout_seconds
+	// 算出)。它让消费方知道"调度台什么时候会把这轮标成 timeout":
+	//
+	//   - 消费到时已经过期: 这轮注定是 timeout, 再执行只会占住长队列 (FIFO), 直接 ack 丢弃;
+	//   - 未过期: 用这个截止时间约束 handler 的 context, 到点让 DB/HTTP 调用返回。
+	//
+	// 老 scheduler 不发这个字段 (nil) 时行为与从前一致: 不丢弃、不设截止时间。
+	Deadline *time.Time `json:"deadline,omitempty"`
 }
 
 func NewMessage(runID, taskID int64, taskType string, params json.RawMessage, scheduledAt *time.Time) Message {
@@ -506,6 +514,11 @@ func (c *Consumer) consumeOnce(ctx context.Context, queue string, routingKeys []
 	}
 }
 
+// expired 报告这一轮 run 是否已经过了调度台给的截止时间。
+func (m Message) expired(now time.Time) bool {
+	return m.Deadline != nil && !now.Before(*m.Deadline)
+}
+
 func (c *Consumer) handleDelivery(ctx context.Context, queue string, delivery amqp.Delivery, handler Handler) {
 	msg, err := Decode(delivery.Body)
 	if err != nil {
@@ -513,7 +526,48 @@ func (c *Consumer) handleDelivery(ctx context.Context, queue string, delivery am
 		_ = delivery.Reject(false)
 		return
 	}
-	if err := handler(ctx, msg); err == nil {
+	// 投递到消费之间的排队时间。scheduler 的 timeout_seconds 量的是 run 的寿命 (含排队),
+	// 长队列 FIFO 时这一行是判断"超时是排队还是执行"的第一手证据。
+	if !delivery.Timestamp.IsZero() {
+		if delay := time.Since(delivery.Timestamp); delay > 60*time.Second {
+			c.log.Warn("task message waited in queue",
+				zap.String("queue", queue),
+				zap.String("task_type", msg.TaskType),
+				zap.Int64("run_id", msg.RunID),
+				zap.Duration("queue_delay", delay),
+			)
+		}
+	}
+	handlerCtx := ctx
+	if msg.Deadline != nil {
+		if msg.expired(time.Now()) {
+			// 这轮 run 在调度台已经/即将被标 timeout, 再执行一次只会继续占住队列 ——
+			// 长队列 FIFO, 后面的命令会跟着一起超时。直接 ack: 不重投, 也不回报
+			// (run 已是终态, 回执会被丢弃)。
+			c.log.Warn("dropping expired task message",
+				zap.String("queue", queue),
+				zap.String("task_type", msg.TaskType),
+				zap.Int64("run_id", msg.RunID),
+				zap.Duration("overdue", time.Since(*msg.Deadline)),
+			)
+			_ = delivery.Ack(false)
+			return
+		}
+		var cancel context.CancelFunc
+		handlerCtx, cancel = context.WithDeadline(ctx, *msg.Deadline)
+		defer cancel()
+	}
+	if err := handler(handlerCtx, msg); err == nil {
+		_ = delivery.Ack(false)
+		return
+	} else if errors.Is(err, context.DeadlineExceeded) {
+		// 到点后 handler 的错误多半是 DB/HTTP 调用被 ctx 取消的连带结果。重投只会
+		// 再占一轮队列, 而 run 的终态由 scheduler 负责。
+		c.log.Warn("task message deadline exceeded; not retrying",
+			zap.String("task_type", msg.TaskType),
+			zap.Int64("run_id", msg.RunID),
+			zap.Error(err),
+		)
 		_ = delivery.Ack(false)
 		return
 	} else if msg.Attempt < c.cfg.MaxAttempts {

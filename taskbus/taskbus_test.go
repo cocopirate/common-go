@@ -41,6 +41,43 @@ func TestMessageValidation(t *testing.T) {
 	}
 }
 
+// Deadline 必须随命令原样往返: 消费方靠它判断"这轮 run 是否已经被调度台标成 timeout"。
+func TestMessageRoundTripKeepsDeadline(t *testing.T) {
+	deadline := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	msg := NewMessage(1, 2, "domain.object.action", nil, nil)
+	msg.Deadline = &deadline
+
+	raw, err := msg.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	got, err := Decode(raw)
+	if err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+	if got.Deadline == nil || !got.Deadline.Equal(deadline) {
+		t.Fatalf("deadline = %v, want %v", got.Deadline, deadline)
+	}
+}
+
+func TestMessageExpired(t *testing.T) {
+	deadline := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	msg := Message{Deadline: &deadline}
+	if msg.expired(deadline.Add(-time.Nanosecond)) {
+		t.Fatal("截止前不该判过期")
+	}
+	if !msg.expired(deadline) {
+		t.Fatal("到达截止时间即过期")
+	}
+	if !msg.expired(deadline.Add(time.Second)) {
+		t.Fatal("截止后应判过期")
+	}
+	// 老 scheduler 不发 deadline: 永远不判过期, 行为与从前一致。
+	if (Message{}).expired(time.Now()) {
+		t.Fatal("没有 deadline 的消息不该过期")
+	}
+}
+
 func TestNewRunResultMessage(t *testing.T) {
 	msg, err := NewRunResultMessage(7, 9, RunResult{
 		Status:     "failed",
