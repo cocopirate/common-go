@@ -93,6 +93,10 @@ const (
 	// 结果落 common_administrative_regions, 是**唯一**一份行政区划数据: 没有它, 依赖
 	// 区划的地址选择器就是一张空表, 而高德的配额 (个人认证每月十几万次) 撑得住每周全量。
 	MetadataQueue = "opengo.metadata.tasks"
+	// ReportingQueue 承载定时报表/播报命令（提醒事项到期摘要、QQ 广告日报等）。
+	// 这些都归 reporting-service 执行：它们只读自己的库/外部广告 API，不参与业务写库，
+	// 与资金、订单等命令没有顺序依赖。放在同一条队列里串行，避免每个小报表再拆一条。
+	ReportingQueue = "opengo.reporting.tasks"
 	// 结果队列: 业务服务回报 → scheduler 消费, 方向与上面相反。正因为它反向,
 	// **发起 run 的业务服务也要在启动时 EnsureQueue 它**: exchange 上还没有绑定时,
 	// publisher confirm 依然 ACK, 消息会被静默丢弃 (见 Publisher.EnsureQueue)。
