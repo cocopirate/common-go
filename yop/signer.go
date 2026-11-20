@@ -75,6 +75,41 @@ func (s *YopSigner) SignRequest(
 	return s.finishSign(authStr, canonicalRequest, requestID, signedHeaders, nil)
 }
 
+// SignFormRequest generates the Yop-Auth-V3 signature for a form POST.
+//
+// 与 SignRequest（v2，GET 用）不同，这里复刻的是 Python SDK 4.3.0 的
+// SigV3Authenticator.generate_signature(http_method=POST)：
+//
+//   - 协议串是 yop-auth-v3，canonical request 的 query 段**留空**；
+//   - 表单参数经排序、URL 编码后取 SHA256，放进 x-yop-content-sha256 头，
+//     并参与 signed_headers；
+//   - 参数本身要由调用方放在 URL query string 里发送（见 Client.PostForm）。
+//
+// 为什么必须这样签：2026-11-20 线上 transfer/b2b/order 用 v2 + form body 被
+// 易宝以 state=FAILURE、无业务返回码拒绝（平台层），而同一套凭据用 Python SDK
+// 的 v3 方式（参数放 query）转账成功；同一天 v2 与 v3 的 GET 查询都可用，
+// 说明网关对 POST 表单的取参/验签走的是 v3 这条路径。
+func (s *YopSigner) SignFormRequest(apiPath string, formParams map[string]string) (*SignResult, error) {
+	authStr := s.buildAuthV3Str()
+
+	// content-sha256 绑定的是「排序、URL 编码后的参数串」（Python 的 get_query_str）。
+	contentSHA256 := hex.EncodeToString(sha256Sum([]byte(buildCanonicalQuery(formParams))))
+
+	requestID := uuid.New().String()
+
+	canonicalHeaderStr := fmt.Sprintf("x-yop-appkey:%s\nx-yop-content-sha256:%s\nx-yop-request-id:%s",
+		url.QueryEscape(s.appKey),
+		url.QueryEscape(contentSHA256),
+		url.QueryEscape(requestID))
+	signedHeaders := "x-yop-appkey;x-yop-content-sha256;x-yop-request-id"
+
+	// POST 表单：query 段留空（参数已由 content-sha256 绑定）。
+	canonicalRequest := fmt.Sprintf("%s\nPOST\n%s\n\n%s", authStr, apiPath, canonicalHeaderStr)
+
+	return s.finishSign(authStr, canonicalRequest, requestID, signedHeaders,
+		map[string]string{HeaderYopContentSha256: contentSHA256})
+}
+
 // SignJSONRequest generates the Yop-Auth-V2 signature for an application/json request.
 // Mirrors Python's SigV3Authenticator.generate_signature(json_param=True):
 // the query string is empty and the body's SHA256 is carried in the
@@ -108,6 +143,13 @@ func (s *YopSigner) buildAuthStr() string {
 	yopDate := s.now().UTC().Format(TimestampFormat)
 	return fmt.Sprintf("%s/%s/%s/%s",
 		ProtocolVersion, s.appKey, yopDate, ExpiredSeconds)
+}
+
+// buildAuthV3Str builds the auth string: yop-auth-v3/{appKey}/{timestamp}/{1800}.
+func (s *YopSigner) buildAuthV3Str() string {
+	yopDate := s.now().UTC().Format(TimestampFormat)
+	return fmt.Sprintf("%s/%s/%s/%s",
+		ProtocolVersionV3, s.appKey, yopDate, ExpiredSeconds)
 }
 
 // finishSign computes the RSA signature, assembles the Authorization header

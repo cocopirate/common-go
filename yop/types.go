@@ -8,10 +8,13 @@ import (
 // Yop-Auth-V2 protocol constants, matching Python SDK.
 const (
 	ProtocolVersion = "yop-auth-v2"
-	Algorithm       = "YOP-RSA2048-SHA256"
-	HashAlgorithm   = "SHA256"
-	ExpiredSeconds  = "1800"
-	TimestampFormat = "20060102T150405Z" // matches Python %Y%m%dT%H%M%SZ
+	// ProtocolVersionV3 是 POST 表单走的协议版本（Python SDK 4.3.0 的
+	// SigV3AuthProvider）。GET 仍用 v2 —— 它已在线上验证可用，不动。
+	ProtocolVersionV3 = "yop-auth-v3"
+	Algorithm         = "YOP-RSA2048-SHA256"
+	HashAlgorithm     = "SHA256"
+	ExpiredSeconds    = "1800"
+	TimestampFormat   = "20060102T150405Z" // matches Python %Y%m%dT%H%M%SZ
 )
 
 // Signed header names.
