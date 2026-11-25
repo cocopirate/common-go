@@ -102,8 +102,12 @@ type Error struct {
 // DispatchRequest is the gateway -> business-service envelope. Identity is
 // derived from the verified auth token, never from client data.
 type DispatchRequest struct {
-	Tenant       string          `json:"tenant,omitempty"`
+	Tenant string `json:"tenant,omitempty"`
+	// UserID is the canonical routing identity used by TargetUser (for IM this is
+	// the account_id as a string). Subject is the original auth subject used for
+	// upstream identity mapping (for IM it may be oc_ord_*).
 	UserID       string          `json:"user_id"`
+	Subject      string          `json:"subject,omitempty"`
 	AccountID    int64           `json:"account_id,omitempty"`
 	IdentityType string          `json:"identity_type,omitempty"`
 	Name         string          `json:"name,omitempty"`
@@ -169,6 +173,39 @@ func (k KickRequest) Validate() error {
 // KickResult reports the number of local connections closed.
 type KickResult struct {
 	Kicked int `json:"kicked"`
+}
+
+// UnsubscribeRequest removes a user/connection from rooms on every gateway node.
+// It is used when business membership changes (group leave/dismiss) and the room
+// subscription must be revoked, not just a notification emitted.
+type UnsubscribeRequest struct {
+	Tenant       string   `json:"tenant,omitempty"`
+	UserID       string   `json:"user_id,omitempty"`
+	ConnectionID string   `json:"connection_id,omitempty"`
+	Rooms        []string `json:"rooms"`
+}
+
+func (u UnsubscribeRequest) Validate() error {
+	if strings.TrimSpace(u.UserID) == "" && strings.TrimSpace(u.ConnectionID) == "" {
+		return errors.New("user_id or connection_id is required")
+	}
+	if len(u.Rooms) == 0 {
+		return errors.New("rooms is required")
+	}
+	return nil
+}
+
+// CloseRoomRequest removes every local connection from a room (group dismissal).
+type CloseRoomRequest struct {
+	Tenant string `json:"tenant,omitempty"`
+	Room   string `json:"room"`
+}
+
+func (r CloseRoomRequest) Validate() error {
+	if strings.TrimSpace(r.Room) == "" {
+		return errors.New("room is required")
+	}
+	return nil
 }
 
 // DispatchAction tells the gateway what to do after a business event.
