@@ -13,6 +13,7 @@ use (
 	./logx
 	./ossx
 	./redisx
+	./realtimex
 	./securechannel
 	./telemetry
 	./taskbus
@@ -34,6 +35,8 @@ replace github.com/cocopirate/common-go/logx v0.1.2 => ./logx
 replace github.com/cocopirate/common-go/ossx v0.1.0 => ./ossx
 
 replace github.com/cocopirate/common-go/redisx v0.1.0 => ./redisx
+
+replace github.com/cocopirate/common-go/realtimex v0.1.0 => ./realtimex
 
 replace github.com/cocopirate/common-go/telemetry v0.1.9 => ./telemetry
 

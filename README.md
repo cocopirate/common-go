@@ -20,6 +20,7 @@
 | `logx` | Zap 日志初始化和日志字段辅助方法。 |
 | `ossx` | 阿里云 OSS 签名 URL 与公共域名 URL 辅助方法。 |
 | `redisx` | Redis client 创建和配置辅助方法。 |
+| `realtimex` | realtime-gateway 与业务服务之间的传输无关契约：客户端事件、dispatch、publish/kick、target/action。 |
 | `taskbus` | RabbitMQ 任务总线契约：服务间只交换稳定的 JSON 命令，exchange 声明、publisher confirm、重试队列与死信路由都藏在包内。**任务类型字面量（`<域>.<对象>.<动作>`）不在这里** —— 2026-10 起归消费它的服务所有（`internal/<域>/` 的 `TaskType*` 常量），本包只留队列名、信封和错误码；跨服务的两份副本由 `tools/routecheck` 的 taskbus 检查比对。 |
 | `telemetry` | Request ID、指标、OpenTelemetry 和 Gin span 支持。 |
 | `yop` | 易宝 YOP OpenAPI 客户端与 Yop-Auth-V2（RSA2048-SHA256）签名。 |
@@ -39,6 +40,7 @@ jobx/        # 后台任务队列辅助包
 logx/        # 日志辅助包
 ossx/        # 阿里云 OSS 辅助包
 redisx/      # Redis 辅助包
+realtimex/   # 实时网关与业务服务契约辅助包
 taskbus/     # RabbitMQ 任务总线辅助包
 telemetry/   # 链路追踪与指标辅助包
 yop/         # 易宝 YOP OpenAPI 辅助包
@@ -59,7 +61,7 @@ go.work      # 本地多模块工作区
 ```bash
 go test ./authx/... ./bootstrap/... ./configx/... ./dbx/... ./endpointx/... ./exportx/... \
   ./gwclient/... ./httpx/... ./jobx/... ./logx/... ./ossx/... ./redisx/... \
-  ./taskbus/... ./telemetry/... ./yop/...
+  ./realtimex/... ./taskbus/... ./telemetry/... ./yop/...
 ```
 
 也可以进单个模块目录跑，那也是验证"独立发布后消费者能否构建"的方式：
