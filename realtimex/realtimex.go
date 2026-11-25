@@ -17,10 +17,24 @@ import (
 // Gateway-generated event names.
 const (
 	EventReady = "ready"
-	EventPing  = "ping"
-	EventPong  = "pong"
-	EventError = "error"
+	// EventConnect is dispatched once after the gateway has registered a
+	// connection and sent ready. Business services use it for session bootstrap
+	// (for example, delivering offline messages or joining default rooms).
+	EventConnect  = "connect"
+	EventPresence = "presence"
+	EventPing     = "ping"
+	EventPong     = "pong"
+	EventError    = "error"
 )
+
+// PresenceEvent is dispatched to the business service on connect/disconnect.
+// ConnectionCount is global across gateway nodes when Redis presence is enabled;
+// otherwise it is the local count.
+type PresenceEvent struct {
+	Online          bool   `json:"online"`
+	ConnectionCount int64  `json:"connection_count"`
+	DeviceID        string `json:"device_id,omitempty"`
+}
 
 // Target identifies where a gateway publish should go.
 type TargetType string
@@ -88,11 +102,15 @@ type Error struct {
 // DispatchRequest is the gateway -> business-service envelope. Identity is
 // derived from the verified auth token, never from client data.
 type DispatchRequest struct {
-	Tenant       string      `json:"tenant,omitempty"`
-	UserID       string      `json:"user_id"`
-	ConnectionID string      `json:"connection_id"`
-	DeviceID     string      `json:"device_id,omitempty"`
-	Event        ClientEvent `json:"event"`
+	Tenant       string          `json:"tenant,omitempty"`
+	UserID       string          `json:"user_id"`
+	AccountID    int64           `json:"account_id,omitempty"`
+	IdentityType string          `json:"identity_type,omitempty"`
+	Name         string          `json:"name,omitempty"`
+	Attributes   json.RawMessage `json:"attributes,omitempty"`
+	ConnectionID string          `json:"connection_id"`
+	DeviceID     string          `json:"device_id,omitempty"`
+	Event        ClientEvent     `json:"event"`
 }
 
 // PublishRequest is the business-service -> gateway envelope. It may be sent
